@@ -13,3 +13,14 @@ export interface ImageMeta {
   colorDepthLabel: string;
   hasAlpha: boolean;
 }
+
+export type ToolMode = 'hand' | 'eyedropper';
+
+export interface PixelSample {
+  x: number;
+  y: number;
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
