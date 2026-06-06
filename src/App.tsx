@@ -3,8 +3,10 @@ import { Alert, Box, Snackbar } from '@mui/material';
 import { Toolbar, type SaveFormat } from './Toolbar';
 import { ImageCanvas } from './ImageCanvas';
 import { StatusBar } from './StatusBar';
-import type { PixelImage } from './types';
+import { SidePanel } from './SidePanel';
+import type { PixelImage, PixelSample, ToolMode } from './types';
 import { encodeToBlob, loadImageFile, triggerDownload } from './imageIO';
+import { defaultMask, type ChannelMask } from './channels';
 
 function baseName(name: string): string {
   const dot = name.lastIndexOf('.');
@@ -15,12 +17,17 @@ export default function App() {
   const [image, setImage] = useState<PixelImage | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mask, setMask] = useState<ChannelMask>(defaultMask);
+  const [tool, setTool] = useState<ToolMode>('hand');
+  const [sample, setSample] = useState<PixelSample | null>(null);
 
   const handleLoad = async (file: File) => {
     try {
       const loaded = await loadImageFile(file);
       setImage(loaded);
       setFileName(file.name);
+      setMask(defaultMask());
+      setSample(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось загрузить файл');
     }
@@ -40,8 +47,23 @@ export default function App() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      <Toolbar onLoad={handleLoad} onSave={handleSave} canSave={Boolean(image)} />
-      <ImageCanvas image={image} />
+      <Toolbar
+        onLoad={handleLoad}
+        onSave={handleSave}
+        canSave={Boolean(image)}
+        tool={tool}
+        onToolChange={setTool}
+      />
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <ImageCanvas image={image} mask={mask} tool={tool} onPick={setSample} />
+        <SidePanel
+          image={image}
+          mask={mask}
+          onMaskChange={setMask}
+          sample={sample}
+          toolActive={tool === 'eyedropper'}
+        />
+      </Box>
       <StatusBar image={image} fileName={fileName} />
       <Snackbar
         open={Boolean(error)}

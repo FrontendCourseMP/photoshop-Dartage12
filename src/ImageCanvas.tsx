@@ -1,15 +1,20 @@
 import { useEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
-import type { PixelImage } from './types';
+import type { PixelImage, PixelSample, ToolMode } from './types';
+import { applyChannelMask, type ChannelMask } from './channels';
 
 interface Props {
   image: PixelImage | null;
+  mask: ChannelMask;
+  tool: ToolMode;
+  onPick: (sample: PixelSample) => void;
 }
 
-export function ImageCanvas({ image }: Props) {
+export function ImageCanvas({ image, mask, tool, onPick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sourceRef = useRef<HTMLCanvasElement | null>(null);
+  const displayRef = useRef({ w: 0, h: 0 });
 
   useEffect(() => {
     if (!image) {
@@ -21,14 +26,10 @@ export function ImageCanvas({ image }: Props) {
     src.height = image.height;
     const sctx = src.getContext('2d');
     if (sctx) {
-      sctx.putImageData(
-        new ImageData(new Uint8ClampedArray(image.data), image.width, image.height),
-        0,
-        0,
-      );
+      sctx.putImageData(applyChannelMask(image, mask), 0, 0);
     }
     sourceRef.current = src;
-  }, [image]);
+  }, [image, mask]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -45,6 +46,7 @@ export function ImageCanvas({ image }: Props) {
       if (!image || !src || cw === 0 || ch === 0) {
         canvas.width = 0;
         canvas.height = 0;
+        displayRef.current = { w: 0, h: 0 };
         return;
       }
 
@@ -57,6 +59,7 @@ export function ImageCanvas({ image }: Props) {
       canvas.height = Math.round(dispH * dpr);
       canvas.style.width = `${dispW}px`;
       canvas.style.height = `${dispH}px`;
+      displayRef.current = { w: dispW, h: dispH };
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, dispW, dispH);
@@ -73,7 +76,35 @@ export function ImageCanvas({ image }: Props) {
       observer.disconnect();
       window.removeEventListener('resize', draw);
     };
-  }, [image]);
+  }, [image, mask]);
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!image || tool !== 'eyedropper') return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    const { w: dispW, h: dispH } = displayRef.current;
+    if (dispW === 0 || dispH === 0) return;
+
+    const ix = Math.floor((cssX / dispW) * image.width);
+    const iy = Math.floor((cssY / dispH) * image.height);
+    if (ix < 0 || iy < 0 || ix >= image.width || iy >= image.height) return;
+
+    const o = (iy * image.width + ix) * 4;
+    onPick({
+      x: ix,
+      y: iy,
+      r: image.data[o],
+      g: image.data[o + 1],
+      b: image.data[o + 2],
+      a: image.data[o + 3],
+    });
+  };
+
+  const cursor = image && tool === 'eyedropper' ? 'crosshair' : 'default';
 
   return (
     <Box
@@ -92,7 +123,11 @@ export function ImageCanvas({ image }: Props) {
       {image ? (
         <canvas
           ref={canvasRef}
-          style={{ boxShadow: '0 0 0 1px #3a3a3a, 0 8px 24px rgba(0,0,0,0.5)' }}
+          onClick={handleClick}
+          style={{
+            cursor,
+            boxShadow: '0 0 0 1px #3a3a3a, 0 8px 24px rgba(0,0,0,0.5)',
+          }}
         />
       ) : (
         <Typography color="text.secondary" sx={{ userSelect: 'none' }}>
