@@ -15,8 +15,9 @@ import FileUploadIcon from '@mui/icons-material/FileUpload';
 import DownloadIcon from '@mui/icons-material/Download';
 import ColorizeIcon from '@mui/icons-material/Colorize';
 import PanToolIcon from '@mui/icons-material/PanTool';
-import TuneIcon from '@mui/icons-material/Tune';
 import PhotoSizeSelectLargeIcon from '@mui/icons-material/PhotoSizeSelectLarge';
+import TuneIcon from '@mui/icons-material/Tune';
+import BlurOnIcon from '@mui/icons-material/BlurOn';
 import type { ToolMode } from './types';
 
 export type SaveFormat = 'png' | 'jpeg' | 'gb7';
@@ -29,6 +30,7 @@ interface Props {
   onToolChange: (tool: ToolMode) => void;
   onOpenLevels: () => void;
   onOpenResize: () => void;
+  onOpenFilter: () => void;
 }
 
 export function Toolbar({
@@ -39,6 +41,7 @@ export function Toolbar({
   onToolChange,
   onOpenLevels,
   onOpenResize,
+  onOpenFilter,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
@@ -80,7 +83,6 @@ export function Toolbar({
         >
           Загрузить
         </Button>
-
         <Button
           variant="outlined"
           startIcon={<DownloadIcon />}
@@ -97,7 +99,7 @@ export function Toolbar({
 
         <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
 
-        <Tooltip title="Перемещение (по умолчанию)">
+        <Tooltip title="Перемещение (рука)">
           <span>
             <IconButton
               size="small"
@@ -108,7 +110,7 @@ export function Toolbar({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Пипетка: клик по пикселю изображения">
+        <Tooltip title="Пипетка: клик по пикселю показывает цвет">
           <span>
             <IconButton
               size="small"
@@ -136,7 +138,6 @@ export function Toolbar({
             </Button>
           </span>
         </Tooltip>
-
         <Tooltip title="Изменить размер изображения с выбором алгоритма интерполяции">
           <span>
             <Button
@@ -147,6 +148,19 @@ export function Toolbar({
               disabled={!canSave}
             >
               Размер
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="Фильтрация ядром свёртки 3×3 (резкость, размытие, границы)">
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<BlurOnIcon />}
+              onClick={onOpenFilter}
+              disabled={!canSave}
+            >
+              Фильтр
             </Button>
           </span>
         </Tooltip>
