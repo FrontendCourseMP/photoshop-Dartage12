@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Typography } from '@mui/material';
 import type { PixelImage, PixelSample, ToolMode } from './types';
 import { applyChannelMask, type ChannelMask } from './channels';
@@ -8,13 +8,16 @@ interface Props {
   mask: ChannelMask;
   tool: ToolMode;
   onPick: (sample: PixelSample) => void;
+  zoom: number;
+  onContainerSize?: (size: { width: number; height: number }) => void;
 }
 
-export function ImageCanvas({ image, mask, tool, onPick }: Props) {
+export function ImageCanvas({ image, mask, tool, onPick, zoom, onContainerSize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sourceRef = useRef<HTMLCanvasElement | null>(null);
-  const displayRef = useRef({ w: 0, h: 0 });
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  const [displayRect, setDisplayRect] = useState({ x: 0, y: 0, w: 0, h: 0 });
 
   useEffect(() => {
     if (!image) {
@@ -33,66 +36,68 @@ export function ImageCanvas({ image, mask, tool, onPick }: Props) {
 
   useEffect(() => {
     const container = containerRef.current;
+    if (!container) return;
+    const update = () => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      setContainerSize({ w, h });
+      onContainerSize?.({ width: w, height: h });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [onContainerSize]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!container || !canvas) return;
+    const src = sourceRef.current;
+    if (!canvas) return;
 
-    const draw = () => {
-      const src = sourceRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+    const { w: cw, h: ch } = containerSize;
+    if (!image || !src || cw === 0 || ch === 0) {
+      canvas.width = 0;
+      canvas.height = 0;
+      setDisplayRect({ x: 0, y: 0, w: 0, h: 0 });
+      return;
+    }
 
-      const cw = container.clientWidth;
-      const ch = container.clientHeight;
-      if (!image || !src || cw === 0 || ch === 0) {
-        canvas.width = 0;
-        canvas.height = 0;
-        displayRef.current = { w: 0, h: 0 };
-        return;
-      }
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(cw * dpr);
+    canvas.height = Math.round(ch * dpr);
+    canvas.style.width = `${cw}px`;
+    canvas.style.height = `${ch}px`;
 
-      const scale = Math.min(cw / image.width, ch / image.height, 1);
-      const dispW = Math.max(1, Math.round(image.width * scale));
-      const dispH = Math.max(1, Math.round(image.height * scale));
-      const dpr = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      canvas.width = Math.round(dispW * dpr);
-      canvas.height = Math.round(dispH * dpr);
-      canvas.style.width = `${dispW}px`;
-      canvas.style.height = `${dispH}px`;
-      displayRef.current = { w: dispW, h: dispH };
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, cw, ch);
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, dispW, dispH);
-      drawCheckerboard(ctx, dispW, dispH);
-      ctx.imageSmoothingEnabled = scale < 1;
-      ctx.drawImage(src, 0, 0, image.width, image.height, 0, 0, dispW, dispH);
-    };
+    const dispW = Math.max(1, image.width * zoom);
+    const dispH = Math.max(1, image.height * zoom);
+    const dx = (cw - dispW) / 2;
+    const dy = (ch - dispH) / 2;
+    setDisplayRect({ x: dx, y: dy, w: dispW, h: dispH });
 
-    draw();
-    const observer = new ResizeObserver(draw);
-    observer.observe(container);
-    window.addEventListener('resize', draw);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', draw);
-    };
-  }, [image, mask]);
+    drawCheckerboard(ctx, dx, dy, dispW, dispH);
+    ctx.imageSmoothingEnabled = zoom < 1;
+    ctx.drawImage(src, dx, dy, dispW, dispH);
+  }, [image, mask, zoom, containerSize]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!image || tool !== 'eyedropper') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const rect = canvas.getBoundingClientRect();
     const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
-    const { w: dispW, h: dispH } = displayRef.current;
-    if (dispW === 0 || dispH === 0) return;
-
-    const ix = Math.floor((cssX / dispW) * image.width);
-    const iy = Math.floor((cssY / dispH) * image.height);
+    const { x, y, w, h } = displayRect;
+    if (w === 0 || h === 0) return;
+    const ix = Math.floor(((cssX - x) / w) * image.width);
+    const iy = Math.floor(((cssY - y) / h) * image.height);
     if (ix < 0 || iy < 0 || ix >= image.width || iy >= image.height) return;
-
     const o = (iy * image.width + ix) * 4;
     onPick({
       x: ix,
@@ -126,7 +131,7 @@ export function ImageCanvas({ image, mask, tool, onPick }: Props) {
           onClick={handleClick}
           style={{
             cursor,
-            boxShadow: '0 0 0 1px #3a3a3a, 0 8px 24px rgba(0,0,0,0.5)',
+            boxShadow: '0 0 0 1px #3a3a3a, 0 8px 24px rgba(0,0,0,0.45)',
           }}
         />
       ) : (
@@ -138,13 +143,21 @@ export function ImageCanvas({ image, mask, tool, onPick }: Props) {
   );
 }
 
-function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
+function drawCheckerboard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
   const tile = 10;
-  for (let y = 0; y < h; y += tile) {
-    for (let x = 0; x < w; x += tile) {
-      const even = ((x / tile) | 0) % 2 === ((y / tile) | 0) % 2;
+  for (let ty = 0; ty < h; ty += tile) {
+    for (let tx = 0; tx < w; tx += tile) {
+      const even = ((tx / tile) | 0) % 2 === ((ty / tile) | 0) % 2;
       ctx.fillStyle = even ? '#3a3a3a' : '#2b2b2b';
-      ctx.fillRect(x, y, tile, tile);
+      const dw = Math.min(tile, w - tx);
+      const dh = Math.min(tile, h - ty);
+      ctx.fillRect(x + tx, y + ty, dw, dh);
     }
   }
 }
