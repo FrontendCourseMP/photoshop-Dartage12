@@ -16,7 +16,7 @@
 
 ## Ссылка на хостинг
 
-**https://graphz-lab1.netlify.app/**
+**https://celebrated-starburst-a5a2bf.netlify.app/**
 
 ## Возможности
 
