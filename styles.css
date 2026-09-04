@@ -58,6 +58,8 @@ summary:focus-visible {
 .app-shell {
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr) 30px;
+  height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
   min-height: 100dvh;
   background: var(--chrome);
@@ -287,13 +289,17 @@ summary:focus-visible {
 }
 
 .empty-state {
-  width: min(540px, calc(100vw - 110px));
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(540px, calc(100% - 80px));
   padding: 42px 34px;
   border: 1px dashed var(--line-strong);
   border-radius: 16px;
   background: rgba(23, 26, 32, 0.72);
   box-shadow: var(--shadow);
   text-align: center;
+  transform: translate(-50%, -50%);
   backdrop-filter: blur(10px);
 }
 
@@ -1534,6 +1540,7 @@ input[type="range"] {
 
   .app-shell {
     grid-template-rows: auto auto auto;
+    height: auto;
   }
 
   .topbar {
@@ -1613,8 +1620,10 @@ input[type="range"] {
   }
 
   .empty-state {
+    position: static;
     width: calc(100vw - 44px);
     padding: 30px 18px;
+    transform: none;
   }
 
   .sample-list {
