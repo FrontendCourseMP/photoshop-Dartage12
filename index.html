@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#111318" />
     <meta
       name="description"
-      content="Браузерный редактор для просмотра и преобразования PNG, JPEG и учебного формата GrayBit-7."
+      content="Браузерный редактор PNG, JPEG и GrayBit-7 с цветовыми каналами и пипеткой CIELAB."
     />
-    <meta property="og:title" content="GB7 Studio — цифровое представление изображения" />
+    <meta property="og:title" content="GB7 Studio: каналы и пипетка" />
     <meta
       property="og:description"
-      content="Загрузка, просмотр и экспорт PNG, JPEG и GrayBit-7 прямо в браузере."
+      content="Загрузка, просмотр, каналы, пипетка CIELAB и экспорт PNG, JPEG и GrayBit-7."
     />
     <title>GB7 Studio</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23111318%22/><path d=%22M18 17h28v8H26v14h12v-5h-7v-7h15v20H18z%22 fill=%22%237cda9e%22/></svg>" />
@@ -23,7 +23,7 @@
         <div class="brand" aria-label="GB7 Studio">
           <span class="brand-mark" aria-hidden="true">G7</span>
           <span class="brand-name">GB7 Studio</span>
-          <span class="lab-badge">Лабораторная №1</span>
+          <span class="lab-badge">Лабораторные №1 и №2</span>
         </div>
 
         <div class="topbar-actions">
@@ -45,7 +45,21 @@
       </header>
 
       <main class="workspace">
-        <aside class="tool-rail" aria-label="Масштаб изображения">
+        <aside class="tool-rail" aria-label="Инструменты изображения">
+          <button
+            class="tool-button"
+            id="eyedropper-button"
+            type="button"
+            aria-label="Инструмент Пипетка"
+            aria-pressed="false"
+            title="Пипетка (I)"
+            disabled
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="m14.5 4.5 5 5M13 6l5 5-8.5 8.5H4.5v-5zM3 21h7" />
+            </svg>
+          </button>
+          <span class="tool-divider" aria-hidden="true"></span>
           <button class="tool-button" id="zoom-out" type="button" aria-label="Уменьшить масштаб" title="Уменьшить">
             <span aria-hidden="true">−</span>
           </button>
@@ -104,6 +118,39 @@
             </dl>
           </section>
 
+          <section class="panel-section channels-section" aria-labelledby="channels-title">
+            <div class="section-heading section-heading-row">
+              <div>
+                <p class="eyebrow">Цветовая модель</p>
+                <h2 id="channels-title">Каналы</h2>
+              </div>
+              <button class="panel-action" id="reset-channels" type="button" disabled>Все</button>
+            </div>
+            <p class="panel-empty" id="channels-empty">Загрузите изображение, чтобы увидеть его каналы.</p>
+            <div class="channel-list" id="channel-list" aria-label="Каналы изображения"></div>
+          </section>
+
+          <section class="panel-section color-section" aria-labelledby="color-title">
+            <div class="section-heading">
+              <p class="eyebrow">Инструмент «Пипетка»</p>
+              <h2 id="color-title">Цвет пикселя</h2>
+            </div>
+            <p class="panel-empty" id="color-empty">Включите пипетку и кликните по изображению.</p>
+            <div class="color-readout" id="color-readout" hidden>
+              <div class="color-summary">
+                <span class="color-swatch" id="color-swatch" aria-label="Выбранный цвет"></span>
+                <div>
+                  <strong id="color-hex">#000000</strong>
+                  <span id="color-coordinates">X: 0, Y: 0</span>
+                </div>
+              </div>
+              <dl class="color-values">
+                <div><dt>RGB</dt><dd id="color-rgb">0, 0, 0</dd></div>
+                <div><dt>CIELAB</dt><dd id="color-lab">0.0, 0.0, 0.0</dd></div>
+              </dl>
+            </div>
+          </section>
+
           <section class="panel-section export-section">
             <div class="section-heading">
               <p class="eyebrow">Преобразование</p>
@@ -156,6 +203,8 @@
 
     <script src="./js/gb7.js"></script>
     <script src="./js/image-metadata.js"></script>
+    <script src="./js/color.js"></script>
+    <script src="./js/channels.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

@@ -1,6 +1,8 @@
 (() => {
 const { decodeGB7, encodeGB7, GB7Error } = window.GB7Codec;
 const { detectImageFormat, readRasterMetadata } = window.ImageMetadata;
+const { rgbToLab, rgbToHex } = window.ColorSpaces;
+const { listChannels, applyChannels, isolateChannel } = window.ImageChannels;
 
 const MAX_RASTER_PIXELS = 64_000_000;
 const FORMAT_LABELS = { png: "PNG", jpeg: "JPEG", gb7: "GrayBit-7" };
@@ -39,12 +41,29 @@ const elements = {
   zoomOut: document.querySelector("#zoom-out"),
   fitButton: document.querySelector("#fit-button"),
   actualSizeButton: document.querySelector("#actual-size-button"),
+  eyedropperButton: document.querySelector("#eyedropper-button"),
+  channelList: document.querySelector("#channel-list"),
+  channelsEmpty: document.querySelector("#channels-empty"),
+  resetChannels: document.querySelector("#reset-channels"),
+  colorEmpty: document.querySelector("#color-empty"),
+  colorReadout: document.querySelector("#color-readout"),
+  colorSwatch: document.querySelector("#color-swatch"),
+  colorHex: document.querySelector("#color-hex"),
+  colorCoordinates: document.querySelector("#color-coordinates"),
+  colorRgb: document.querySelector("#color-rgb"),
+  colorLab: document.querySelector("#color-lab"),
   toast: document.querySelector("#toast"),
 };
 
 const context = elements.canvas.getContext("2d", { willReadFrequently: true });
+const sourceCanvas = document.createElement("canvas");
+const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
 const state = {
   document: null,
+  originalPixels: null,
+  channelModel: null,
+  activeChannels: new Set(),
+  activeTool: "view",
   zoom: 1,
   zoomMode: "fit",
   busy: false,
@@ -127,9 +146,7 @@ async function loadImageBuffer(buffer, fileName, fileSize = buffer.byteLength) {
 
 function loadGB7(buffer, fileName, fileSize) {
   const decoded = decodeGB7(buffer);
-  elements.canvas.width = decoded.width;
-  elements.canvas.height = decoded.height;
-  context.putImageData(new ImageData(decoded.rgba, decoded.width, decoded.height), 0, 0);
+  setOriginalImage(new ImageData(decoded.rgba, decoded.width, decoded.height));
 
   commitDocument({
     name: fileName,
@@ -139,6 +156,7 @@ function loadGB7(buffer, fileName, fileSize) {
     depthLabel: decoded.hasMask ? "7 бит + 1 бит маски" : "7 бит",
     shortDepth: decoded.hasMask ? "7 бит + маска" : "7 бит",
     fileSize,
+    channelModel: decoded.hasMask ? "gray-alpha" : "gray",
   });
 }
 
@@ -156,7 +174,9 @@ async function loadRaster(buffer, fileName, fileSize, format, bytes) {
   elements.canvas.height = source.height;
   context.clearRect(0, 0, source.width, source.height);
   context.drawImage(source.drawable, 0, 0);
+  const imageData = context.getImageData(0, 0, source.width, source.height);
   source.release();
+  setOriginalImage(imageData);
 
   commitDocument({
     name: fileName,
@@ -166,6 +186,7 @@ async function loadRaster(buffer, fileName, fileSize, format, bytes) {
     depthLabel: metadata.depthLabel,
     shortDepth: `${metadata.bitsPerPixel} бит`,
     fileSize,
+    channelModel: resolveRasterChannelModel(format, metadata, imageData.data),
   });
 }
 
@@ -198,8 +219,141 @@ async function decodeBrowserImage(blob) {
   }
 }
 
+function hasTransparency(pixels) {
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] < 255) return true;
+  }
+  return false;
+}
+
+function resolveRasterChannelModel(format, metadata, pixels) {
+  if (format === "jpeg") return metadata.channels === 1 ? "gray" : "rgb";
+  if (metadata.colorType === 0) return "gray";
+  if (metadata.colorType === 4) return "gray-alpha";
+  if (metadata.colorType === 6) return "rgba";
+  if (metadata.colorType === 3) return hasTransparency(pixels) ? "rgba" : "rgb";
+  return "rgb";
+}
+
+function setOriginalImage(imageData) {
+  state.originalPixels = new Uint8ClampedArray(imageData.data);
+
+  elements.canvas.width = imageData.width;
+  elements.canvas.height = imageData.height;
+  sourceCanvas.width = imageData.width;
+  sourceCanvas.height = imageData.height;
+  sourceContext.putImageData(new ImageData(state.originalPixels, imageData.width, imageData.height), 0, 0);
+}
+
+function renderVisibleChannels() {
+  if (!state.document || !state.originalPixels) return;
+  const pixels = applyChannels(state.originalPixels, state.channelModel, state.activeChannels);
+  context.putImageData(new ImageData(pixels, state.document.width, state.document.height), 0, 0);
+}
+
+function drawChannelThumbnail(canvas, channelKey) {
+  const previewContext = canvas.getContext("2d", { willReadFrequently: true });
+  const scale = Math.min(canvas.width / sourceCanvas.width, canvas.height / sourceCanvas.height);
+  const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+  const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const x = Math.floor((canvas.width - width) / 2);
+  const y = Math.floor((canvas.height - height) / 2);
+
+  previewContext.clearRect(0, 0, canvas.width, canvas.height);
+  previewContext.drawImage(sourceCanvas, x, y, width, height);
+  const preview = previewContext.getImageData(0, 0, canvas.width, canvas.height);
+  const isolated = isolateChannel(preview.data, channelKey);
+  previewContext.putImageData(new ImageData(isolated, canvas.width, canvas.height), 0, 0);
+}
+
+function updateChannelButtons() {
+  elements.channelList.querySelectorAll(".channel-button").forEach((button) => {
+    const isActive = state.activeChannels.has(button.dataset.channel);
+    button.setAttribute("aria-pressed", String(isActive));
+    button.setAttribute(
+      "aria-label",
+      `${button.querySelector("strong").textContent} канал, ${isActive ? "включён" : "выключен"}`,
+    );
+    button.querySelector(".channel-state").textContent = isActive ? "Вкл" : "Выкл";
+  });
+}
+
+function renderChannelPanel() {
+  elements.channelList.replaceChildren();
+  const definitions = listChannels(state.channelModel);
+
+  definitions.forEach((channel) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "channel-button";
+    button.dataset.channel = channel.key;
+    button.setAttribute("aria-pressed", "true");
+    button.setAttribute("aria-label", `${channel.label} канал, включён`);
+
+    const preview = document.createElement("canvas");
+    preview.className = "channel-preview";
+    preview.width = 72;
+    preview.height = 44;
+    preview.setAttribute("aria-hidden", "true");
+    drawChannelThumbnail(preview, channel.key);
+
+    const copy = document.createElement("span");
+    copy.className = "channel-copy";
+    const name = document.createElement("strong");
+    name.textContent = channel.label;
+    const code = document.createElement("span");
+    code.textContent = `Канал ${channel.shortLabel}`;
+    copy.append(name, code);
+
+    const channelState = document.createElement("span");
+    channelState.className = "channel-state";
+    channelState.textContent = "Вкл";
+
+    button.append(preview, copy, channelState);
+    button.addEventListener("click", () => toggleChannel(channel.key));
+    elements.channelList.append(button);
+  });
+
+  elements.channelsEmpty.hidden = true;
+  elements.resetChannels.disabled = false;
+}
+
+function toggleChannel(channelKey) {
+  if (state.activeChannels.has(channelKey)) state.activeChannels.delete(channelKey);
+  else state.activeChannels.add(channelKey);
+
+  updateChannelButtons();
+  renderVisibleChannels();
+
+  const activeLabels = listChannels(state.channelModel)
+    .filter((channel) => state.activeChannels.has(channel.key))
+    .map((channel) => channel.shortLabel);
+  setStatus(activeLabels.length ? `Каналы: ${activeLabels.join(" + ")}` : "Все каналы выключены");
+}
+
+function resetChannels() {
+  state.activeChannels = new Set(listChannels(state.channelModel).map((channel) => channel.key));
+  updateChannelButtons();
+  renderVisibleChannels();
+  setStatus("Все каналы включены");
+}
+
+function configureChannels(model) {
+  state.channelModel = model;
+  state.activeChannels = new Set(listChannels(model).map((channel) => channel.key));
+  renderChannelPanel();
+  renderVisibleChannels();
+}
+
+function resetColorSample() {
+  elements.colorReadout.hidden = true;
+  elements.colorEmpty.hidden = false;
+}
+
 function commitDocument(documentData) {
   state.document = documentData;
+  configureChannels(documentData.channelModel);
+  resetColorSample();
   elements.emptyState.classList.add("is-hidden");
   elements.canvas.classList.add("is-visible");
   elements.currentFile.textContent = documentData.name;
@@ -211,6 +365,7 @@ function commitDocument(documentData) {
   elements.statusDimensions.textContent = `${documentData.width} × ${documentData.height} px`;
   elements.statusDepth.textContent = `Глубина: ${documentData.shortDepth}`;
   elements.downloadButton.disabled = false;
+  elements.eyedropperButton.disabled = false;
   elements.zoomRange.disabled = false;
   [elements.zoomIn, elements.zoomOut, elements.fitButton, elements.actualSizeButton].forEach((button) => {
     button.disabled = false;
@@ -259,6 +414,57 @@ function fitImage() {
 function changeZoom(factor) {
   if (!state.document) return;
   setZoom(state.zoom * factor);
+}
+
+function setActiveTool(tool) {
+  state.activeTool = tool;
+  const isEyedropper = tool === "eyedropper";
+  elements.eyedropperButton.setAttribute("aria-pressed", String(isEyedropper));
+  elements.canvas.classList.toggle("is-eyedropper", isEyedropper);
+
+  if (isEyedropper) setStatus("Пипетка активна: выберите пиксель");
+  else if (state.document) setStatus("Пипетка выключена");
+}
+
+function imageCoordinatesFromPointer(event) {
+  const rect = elements.canvas.getBoundingClientRect();
+  const style = getComputedStyle(elements.canvas);
+  const borderLeft = Number.parseFloat(style.borderLeftWidth) || 0;
+  const borderRight = Number.parseFloat(style.borderRightWidth) || 0;
+  const borderTop = Number.parseFloat(style.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(style.borderBottomWidth) || 0;
+  const displayWidth = rect.width - borderLeft - borderRight;
+  const displayHeight = rect.height - borderTop - borderBottom;
+  const localX = event.clientX - rect.left - borderLeft;
+  const localY = event.clientY - rect.top - borderTop;
+
+  if (localX < 0 || localY < 0 || localX >= displayWidth || localY >= displayHeight) return null;
+
+  return {
+    x: Math.min(elements.canvas.width - 1, Math.floor((localX / displayWidth) * elements.canvas.width)),
+    y: Math.min(elements.canvas.height - 1, Math.floor((localY / displayHeight) * elements.canvas.height)),
+  };
+}
+
+function samplePixel(event) {
+  if (state.activeTool !== "eyedropper" || !state.document || event.button !== 0) return;
+  const coordinates = imageCoordinatesFromPointer(event);
+  if (!coordinates) return;
+
+  const index = (coordinates.y * state.document.width + coordinates.x) * 4;
+  const red = state.originalPixels[index];
+  const green = state.originalPixels[index + 1];
+  const blue = state.originalPixels[index + 2];
+  const lab = rgbToLab(red, green, blue);
+
+  elements.colorSwatch.style.backgroundColor = `rgb(${red} ${green} ${blue})`;
+  elements.colorHex.textContent = rgbToHex(red, green, blue);
+  elements.colorCoordinates.textContent = `X: ${coordinates.x}, Y: ${coordinates.y}`;
+  elements.colorRgb.textContent = `${red}, ${green}, ${blue}`;
+  elements.colorLab.textContent = `L*: ${lab.l.toFixed(1)}, a*: ${lab.a.toFixed(1)}, b*: ${lab.b.toFixed(1)}`;
+  elements.colorEmpty.hidden = true;
+  elements.colorReadout.hidden = false;
+  setStatus(`Пиксель ${coordinates.x}, ${coordinates.y}: RGB ${red}, ${green}, ${blue}`);
 }
 
 function updateExportControls() {
@@ -367,6 +573,11 @@ elements.zoomIn.addEventListener("click", () => changeZoom(1.25));
 elements.zoomOut.addEventListener("click", () => changeZoom(0.8));
 elements.fitButton.addEventListener("click", fitImage);
 elements.actualSizeButton.addEventListener("click", () => setZoom(1));
+elements.eyedropperButton.addEventListener("click", () => {
+  setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
+});
+elements.resetChannels.addEventListener("click", resetChannels);
+elements.canvas.addEventListener("pointerdown", samplePixel);
 
 document.querySelectorAll(".sample-button").forEach((button) => {
   button.addEventListener("click", () => loadSample(button.dataset.sample));
@@ -406,6 +617,10 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     downloadCurrentImage();
   }
+  if (!commandKey && event.key.toLowerCase() === "i" && state.document) {
+    setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
+  }
+  if (event.key === "Escape" && state.activeTool === "eyedropper") setActiveTool("view");
 });
 
 const viewportObserver = new ResizeObserver(() => {

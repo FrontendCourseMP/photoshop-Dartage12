@@ -40,7 +40,7 @@ function readPngMetadata(bytes) {
     ? `${bitDepth} бит (палитра)`
     : `${bitsPerPixel} бит (${bitDepth} бит/канал)`;
 
-  return { width, height, bitDepth, channels, bitsPerPixel, depthLabel };
+  return { width, height, bitDepth, channels, colorType, bitsPerPixel, depthLabel };
 }
 
 function readJpegMetadata(bytes) {

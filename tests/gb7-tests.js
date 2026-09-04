@@ -1,5 +1,7 @@
 (async () => {
 const { decodeGB7, encodeGB7, GB7Error } = window.GB7Codec;
+const { rgbToLab, rgbToHex } = window.ColorSpaces;
+const { applyChannels } = window.ImageChannels;
 
 const results = document.querySelector("#results");
 const summary = document.querySelector("#summary");
@@ -8,6 +10,10 @@ let failed = 0;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function assertClose(actual, expected, tolerance, message) {
+  assert(Math.abs(actual - expected) <= tolerance, `${message}: ${actual}`);
 }
 
 async function test(name, callback) {
@@ -86,6 +92,44 @@ await test("отклонение неверной длины данных", () =
     rejected = error instanceof GB7Error;
   }
   assert(rejected, "обрезанный файл не был отклонён");
+});
+
+await test("отключение зелёного канала без изменения оригинала", () => {
+  const original = new Uint8ClampedArray([10, 20, 30, 255]);
+  const result = applyChannels(original, "rgba", new Set(["red", "blue", "alpha"]));
+
+  assert(result[0] === 10 && result[1] === 0 && result[2] === 30 && result[3] === 255, "зелёный канал не отключён");
+  assert(original[0] === 10 && original[1] === 20 && original[2] === 30, "оригинальные пиксели были изменены");
+});
+
+await test("альфа-канал отображается как чёрно-белая маска", () => {
+  const original = new Uint8ClampedArray([
+    200, 100, 50, 0,
+    20, 40, 60, 192,
+  ]);
+  const result = applyChannels(original, "rgba", new Set(["alpha"]));
+
+  assert(result[0] === 0 && result[1] === 0 && result[2] === 0 && result[3] === 255, "прозрачный пиксель маски неверен");
+  assert(result[4] === 192 && result[5] === 192 && result[6] === 192 && result[7] === 255, "полупрозрачный пиксель маски неверен");
+});
+
+await test("CIELAB для чёрного и белого", () => {
+  const black = rgbToLab(0, 0, 0);
+  const white = rgbToLab(255, 255, 255);
+
+  assertClose(black.l, 0, 0.01, "L* чёрного");
+  assertClose(white.l, 100, 0.01, "L* белого");
+  assertClose(white.a, 0, 0.02, "a* белого");
+  assertClose(white.b, 0, 0.02, "b* белого");
+});
+
+await test("CIELAB и HEX для красного", () => {
+  const red = rgbToLab(255, 0, 0);
+
+  assertClose(red.l, 53.24, 0.05, "L* красного");
+  assertClose(red.a, 80.09, 0.05, "a* красного");
+  assertClose(red.b, 67.2, 0.05, "b* красного");
+  assert(rgbToHex(255, 0, 0) === "#FF0000", "HEX красного неверен");
 });
 
 const referenceFiles = [
