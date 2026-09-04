@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#111318" />
     <meta
       name="description"
-      content="Браузерный редактор PNG, JPEG и GrayBit-7 с каналами, пипеткой CIELAB, гистограммой и коррекцией уровней."
+      content="Браузерный редактор PNG, JPEG и GrayBit-7 с каналами, пипеткой, уровнями и собственными алгоритмами масштабирования."
     />
-    <meta property="og:title" content="GB7 Studio: каналы, пипетка и уровни" />
+    <meta property="og:title" content="GB7 Studio: обработка и масштабирование изображений" />
     <meta
       property="og:description"
-      content="Загрузка, каналы, пипетка CIELAB, гистограмма, уровни и экспорт PNG, JPEG и GrayBit-7."
+      content="Каналы, пипетка CIELAB, уровни, ближайший сосед, билинейная интерполяция и экспорт изображений."
     />
     <title>GB7 Studio</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23111318%22/><path d=%22M18 17h28v8H26v14h12v-5h-7v-7h15v20H18z%22 fill=%22%237cda9e%22/></svg>" />
@@ -23,7 +23,7 @@
         <div class="brand" aria-label="GB7 Studio">
           <span class="brand-mark" aria-hidden="true">G7</span>
           <span class="brand-name">GB7 Studio</span>
-          <span class="lab-badge">Лабораторные №1, №2 и №3</span>
+          <span class="lab-badge">Лабораторные №1-4</span>
         </div>
 
         <div class="topbar-actions">
@@ -69,6 +69,18 @@
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="M4 19V9m5 10V5m5 14v-7m5 7V3M2 21h20" />
+            </svg>
+          </button>
+          <button
+            class="tool-button"
+            id="resize-button"
+            type="button"
+            aria-label="Изменить размер изображения"
+            title="Размер изображения (R)"
+            disabled
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M8 3H3v5M16 21h5v-5M3 8l6-5M21 16l-6 5M14 7h3v3M10 17H7v-3" />
             </svg>
           </button>
           <span class="tool-divider" aria-hidden="true"></span>
@@ -142,6 +154,25 @@
             <div class="channel-list" id="channel-list" aria-label="Каналы изображения"></div>
           </section>
 
+          <section class="panel-section scale-section" aria-labelledby="scale-title">
+            <div class="section-heading section-heading-row">
+              <div>
+                <p class="eyebrow">Отображение</p>
+                <h2 id="scale-title">Масштаб</h2>
+              </div>
+              <output class="scale-output" id="zoom-value" for="zoom-range">100%</output>
+            </div>
+            <input id="zoom-range" type="range" min="12" max="300" value="100" step="1" disabled />
+            <div class="scale-range" aria-hidden="true"><span>12%</span><span>100%</span><span>300%</span></div>
+            <div class="scale-meta">
+              <span>Интерполяция</span>
+              <strong id="scale-method">Билинейная</strong>
+            </div>
+            <button class="button button-secondary resize-panel-button" id="resize-panel-button" type="button" disabled>
+              Изменить размер
+            </button>
+          </section>
+
           <section class="panel-section color-section" aria-labelledby="color-title">
             <div class="section-heading">
               <p class="eyebrow">Инструмент «Пипетка»</p>
@@ -203,16 +234,13 @@
         <div class="status-details">
           <span id="status-dimensions">0 × 0 px</span>
           <span id="status-depth">Глубина: —</span>
-          <label class="zoom-control" for="zoom-range">
-            <span id="zoom-value">100%</span>
-            <input id="zoom-range" type="range" min="5" max="400" value="100" disabled />
-          </label>
+          <span id="status-zoom">Масштаб: 100%</span>
         </div>
       </footer>
     </div>
 
     <dialog class="levels-dialog" id="levels-dialog" aria-labelledby="levels-title">
-      <div class="levels-shell">
+      <div class="dialog-shell levels-shell">
         <header class="dialog-header">
           <div>
             <p class="eyebrow">Градационная коррекция</p>
@@ -284,6 +312,90 @@
       </div>
     </dialog>
 
+    <dialog class="resize-dialog" id="resize-dialog" aria-labelledby="resize-title">
+      <form class="dialog-shell resize-shell" id="resize-form" novalidate>
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Геометрическое преобразование</p>
+            <h2 id="resize-title">Размер изображения</h2>
+          </div>
+          <button class="dialog-close" id="resize-close" type="button" aria-label="Закрыть изменение размера">×</button>
+        </header>
+
+        <div class="resize-body">
+          <div class="pixel-summary" aria-label="Количество пикселей">
+            <div class="pixel-card">
+              <span>До изменения</span>
+              <strong id="pixels-before">0 пикс.</strong>
+            </div>
+            <div class="pixel-arrow" aria-hidden="true">→</div>
+            <div class="pixel-card pixel-card-after">
+              <span>После изменения</span>
+              <strong id="pixels-after">0 пикс.</strong>
+            </div>
+          </div>
+
+          <div class="resize-form-grid">
+            <label class="resize-field" for="resize-units">
+              <span>Единицы</span>
+              <select class="select-control" id="resize-units">
+                <option value="pixels">Пиксели</option>
+                <option value="percent">Проценты</option>
+              </select>
+            </label>
+
+            <div class="resize-dimensions">
+              <label class="resize-field" for="resize-width">
+                <span>Ширина</span>
+                <div class="number-with-unit">
+                  <input id="resize-width" type="number" min="1" max="16384" step="1" required />
+                  <span id="resize-width-unit">px</span>
+                </div>
+              </label>
+
+              <label class="proportion-control" for="resize-proportions">
+                <input id="resize-proportions" type="checkbox" checked />
+                <span class="proportion-icon" aria-hidden="true">↕</span>
+                <span>Сохранять пропорции</span>
+              </label>
+
+              <label class="resize-field" for="resize-height">
+                <span>Высота</span>
+                <div class="number-with-unit">
+                  <input id="resize-height" type="number" min="1" max="16384" step="1" required />
+                  <span id="resize-height-unit">px</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="algorithm-row">
+              <label class="resize-field" for="resize-method">
+                <span>Интерполяция</span>
+                <select class="select-control" id="resize-method">
+                  <option value="bilinear">Билинейная</option>
+                  <option value="nearest">Ближайший сосед</option>
+                </select>
+              </label>
+              <span class="tooltip-wrap">
+                <button class="tooltip-trigger" id="algorithm-help" type="button" aria-describedby="algorithm-tooltip" aria-label="Описание алгоритма интерполяции">?</button>
+                <span class="algorithm-tooltip" id="algorithm-tooltip" role="tooltip">Смешивает четыре соседних пикселя. Даёт более плавный результат и хорошо подходит для фотографий.</span>
+              </span>
+            </div>
+          </div>
+
+          <p class="resize-error" id="resize-error" role="alert" hidden></p>
+        </div>
+
+        <footer class="dialog-footer">
+          <p class="dialog-note">Максимум 16 384 px по стороне и 64 Мп.</p>
+          <div class="dialog-actions">
+            <button class="button button-secondary" id="resize-cancel" type="button">Отмена</button>
+            <button class="button button-primary" id="resize-apply" type="submit">Изменить</button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="./js/gb7.js"></script>
@@ -291,6 +403,7 @@
     <script src="./js/color.js"></script>
     <script src="./js/channels.js"></script>
     <script src="./js/levels.js"></script>
+    <script src="./js/interpolation.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

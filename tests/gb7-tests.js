@@ -10,6 +10,12 @@ const {
   gammaToPosition,
   positionToGamma,
 } = window.ImageLevels;
+const {
+  METHODS,
+  resizePixels,
+  calculateFitScale,
+  scaledDimensions,
+} = window.ImageInterpolation;
 
 const results = document.querySelector("#results");
 const summary = document.querySelector("#summary");
@@ -196,6 +202,74 @@ await test("гистограмма считает Master и Alpha", () => {
 
   assert(master[0] === 1 && master[255] === 1, "композитная гистограмма неверна");
   assert(alpha[0] === 1 && alpha[255] === 1, "гистограмма альфа-канала неверна");
+});
+
+await test("ближайший сосед создаёт чёткие блоки пикселей", () => {
+  const source = new Uint8ClampedArray([
+    10, 0, 0, 255, 20, 0, 0, 255,
+    30, 0, 0, 255, 40, 0, 0, 255,
+  ]);
+  const result = resizePixels(source, 2, 2, 4, 4, "nearest");
+  const redAt = (x, y) => result[(y * 4 + x) * 4];
+
+  assert(redAt(0, 0) === 10 && redAt(1, 1) === 10, "левый верхний пиксель размыт");
+  assert(redAt(2, 0) === 20 && redAt(3, 1) === 20, "правый верхний пиксель неверен");
+  assert(redAt(0, 2) === 30 && redAt(1, 3) === 30, "левый нижний пиксель неверен");
+  assert(redAt(2, 2) === 40 && redAt(3, 3) === 40, "правый нижний пиксель неверен");
+});
+
+await test("билинейная интерполяция смешивает четыре соседних пикселя", () => {
+  const source = new Uint8ClampedArray([
+    0, 0, 0, 255, 100, 100, 100, 255,
+    200, 200, 200, 255, 100, 100, 100, 255,
+  ]);
+  const result = resizePixels(source, 2, 2, 3, 3, "bilinear");
+  const center = (1 * 3 + 1) * 4;
+
+  assert(result[center] === 100 && result[center + 1] === 100, "центр не равен среднему четырёх пикселей");
+  assert(result[center + 3] === 255, "альфа-канал центра изменился");
+});
+
+await test("билинейная интерполяция обрабатывает альфа-канал", () => {
+  const source = new Uint8ClampedArray([
+    50, 50, 50, 0,
+    50, 50, 50, 255,
+  ]);
+  const result = resizePixels(source, 2, 1, 3, 1, "bilinear");
+
+  assert(result[7] === 128, `ожидалась альфа 128, получено ${result[7]}`);
+});
+
+await test("масштабирование не изменяет исходный массив", () => {
+  const source = new Uint8ClampedArray([12, 34, 56, 78]);
+  const result = resizePixels(source, 1, 1, 2, 2);
+
+  result[0] = 255;
+  assert(source[0] === 12, "исходный массив пикселей был изменён");
+  assert(METHODS.bilinear.label === "Билинейная", "билинейный метод не зарегистрирован");
+  assert(METHODS.nearest.label === "Ближайший сосед", "метод ближайшего соседа не зарегистрирован");
+});
+
+await test("вписывание учитывает отступ 50 px и диапазон 12–300%", () => {
+  const regular = calculateFitScale(1000, 500, 700, 500, 50);
+  const tiny = calculateFitScale(10, 10, 1000, 800, 50);
+  const huge = calculateFitScale(10000, 10000, 500, 500, 50);
+  const dimensions = scaledDimensions(100, 80, 1.5);
+
+  assertClose(regular, 0.6, 0.0001, "масштаб с отступами");
+  assert(tiny === 3, "масштаб маленького изображения должен быть ограничен 300%");
+  assert(huge === 0.12, "масштаб большого изображения должен быть ограничен 12%");
+  assert(dimensions.width === 150 && dimensions.height === 120, "размер отображения рассчитан неверно");
+});
+
+await test("неизвестный метод интерполяции отклоняется", () => {
+  let rejected = false;
+  try {
+    resizePixels(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1, 2, 2, "unknown");
+  } catch (error) {
+    rejected = error instanceof TypeError;
+  }
+  assert(rejected, "неизвестный метод не был отклонён");
 });
 
 const referenceFiles = [
