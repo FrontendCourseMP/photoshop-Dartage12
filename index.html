@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111318" />
+    <meta
+      name="description"
+      content="Браузерный редактор для просмотра и преобразования PNG, JPEG и учебного формата GrayBit-7."
+    />
+    <meta property="og:title" content="GB7 Studio — цифровое представление изображения" />
+    <meta
+      property="og:description"
+      content="Загрузка, просмотр и экспорт PNG, JPEG и GrayBit-7 прямо в браузере."
+    />
+    <title>GB7 Studio</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23111318%22/><path d=%22M18 17h28v8H26v14h12v-5h-7v-7h15v20H18z%22 fill=%22%237cda9e%22/></svg>" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="app">
+      <header class="topbar">
+        <div class="brand" aria-label="GB7 Studio">
+          <span class="brand-mark" aria-hidden="true">G7</span>
+          <span class="brand-name">GB7 Studio</span>
+          <span class="lab-badge">Лабораторная №1</span>
+        </div>
+
+        <div class="topbar-actions">
+          <span class="current-file" id="current-file">Новый документ</span>
+          <button class="button button-primary" id="open-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M3.5 19.5h17v-11h-8l-2-3h-7z" />
+              <path d="m3.5 19.5 3-8h14l-3 8" />
+            </svg>
+            Открыть
+          </button>
+          <input
+            id="file-input"
+            class="visually-hidden"
+            type="file"
+            accept=".png,.jpg,.jpeg,.gb7,image/png,image/jpeg"
+          />
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="tool-rail" aria-label="Масштаб изображения">
+          <button class="tool-button" id="zoom-out" type="button" aria-label="Уменьшить масштаб" title="Уменьшить">
+            <span aria-hidden="true">−</span>
+          </button>
+          <button class="tool-button" id="fit-button" type="button" aria-label="Вписать изображение" title="Вписать">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /></svg>
+          </button>
+          <button class="tool-button" id="actual-size-button" type="button" aria-label="Масштаб 100 процентов" title="100%">
+            <span class="tool-text">1:1</span>
+          </button>
+          <button class="tool-button" id="zoom-in" type="button" aria-label="Увеличить масштаб" title="Увеличить">
+            <span aria-hidden="true">+</span>
+          </button>
+        </aside>
+
+        <section class="canvas-viewport" id="canvas-viewport" aria-label="Рабочая область">
+          <div class="canvas-plane" id="canvas-plane">
+            <div class="empty-state" id="empty-state">
+              <div class="drop-icon" aria-hidden="true">
+                <svg viewBox="0 0 32 32"><path d="M6 25h20V11h-9l-3-4H6z" /><path d="M16 14v8m-4-4 4 4 4-4" /></svg>
+              </div>
+              <p class="eyebrow">Рабочая область</p>
+              <h1>Перетащите изображение</h1>
+              <p class="empty-copy">или откройте PNG, JPG, JPEG либо GB7 с компьютера</p>
+              <button class="button button-primary empty-open" id="empty-open-button" type="button">Выбрать файл</button>
+              <div class="sample-block" aria-label="Примеры GrayBit-7">
+                <span>Быстрая проверка</span>
+                <div class="sample-list">
+                  <button class="sample-button" type="button" data-sample="gradient-half-mask.gb7">Градиент</button>
+                  <button class="sample-button" type="button" data-sample="kapibara-mask.gb7">Капибара + маска</button>
+                  <button class="sample-button" type="button" data-sample="vertical-kapibara.gb7">Вертикальная</button>
+                </div>
+              </div>
+            </div>
+            <canvas id="image-canvas" aria-label="Загруженное изображение"></canvas>
+          </div>
+
+          <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+            <div>
+              <strong>Отпустите файл</strong>
+              <span>PNG, JPG или GB7</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector" aria-label="Параметры документа">
+          <section class="panel-section">
+            <div class="section-heading">
+              <p class="eyebrow">Свойства</p>
+              <h2>Документ</h2>
+            </div>
+            <dl class="property-list">
+              <div><dt>Формат</dt><dd id="property-format">—</dd></div>
+              <div><dt>Размер</dt><dd id="property-dimensions">—</dd></div>
+              <div><dt>Глубина</dt><dd id="property-depth">—</dd></div>
+              <div><dt>Файл</dt><dd id="property-filesize">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel-section export-section">
+            <div class="section-heading">
+              <p class="eyebrow">Преобразование</p>
+              <h2>Экспорт</h2>
+            </div>
+
+            <label class="field-label" for="export-format">Формат файла</label>
+            <select class="select-control" id="export-format">
+              <option value="png">PNG — без потерь</option>
+              <option value="jpeg">JPG — компактный</option>
+              <option value="gb7">GB7 — 7 бит серого</option>
+            </select>
+
+            <div class="quality-field is-hidden" id="quality-field">
+              <div class="field-row">
+                <label class="field-label" for="jpeg-quality">Качество JPG</label>
+                <output id="quality-output" for="jpeg-quality">92%</output>
+              </div>
+              <input id="jpeg-quality" type="range" min="10" max="100" value="92" />
+            </div>
+
+            <p class="export-hint" id="export-hint">PNG сохраняет прозрачность без потерь.</p>
+            <button class="button button-download" id="download-button" type="button" disabled>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 20h16" /></svg>
+              Скачать PNG
+            </button>
+          </section>
+
+          <details class="format-note">
+            <summary>Что происходит с GB7?</summary>
+            <p>Цвет переводится в яркость от 0 до 127. При наличии прозрачности старший бит хранит двоичную маску.</p>
+          </details>
+        </aside>
+      </main>
+
+      <footer class="statusbar" aria-label="Строка состояния">
+        <span class="status-message" id="status-message"><i aria-hidden="true"></i> Готово к работе</span>
+        <div class="status-details">
+          <span id="status-dimensions">0 × 0 px</span>
+          <span id="status-depth">Глубина: —</span>
+          <label class="zoom-control" for="zoom-range">
+            <span id="zoom-value">100%</span>
+            <input id="zoom-range" type="range" min="5" max="400" value="100" disabled />
+          </label>
+        </div>
+      </footer>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="./js/gb7.js"></script>
+    <script src="./js/image-metadata.js"></script>
+    <script src="./js/app.js"></script>
+  </body>
+</html>

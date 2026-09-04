@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GB7 Codec Tests</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      body { margin: 0; padding: 32px; background: #0b0c0f; color: #f1f3f5; }
+      main { max-width: 760px; margin: 0 auto; }
+      h1 { font: 700 26px/1.2 ui-sans-serif, system-ui, sans-serif; }
+      #summary { color: #7cda9e; }
+      li { margin: 8px 0; color: #7cda9e; }
+      li.fail { color: #ff8d88; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Проверка кодека GrayBit-7</h1>
+      <p id="summary">Выполняется…</p>
+      <ol id="results"></ol>
+    </main>
+    <script src="../js/gb7.js"></script>
+    <script src="./gb7-tests.js"></script>
+  </body>
+</html>
