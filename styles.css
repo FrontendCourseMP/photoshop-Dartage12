@@ -854,7 +854,8 @@ input[type="range"] {
 }
 
 .levels-dialog,
-.resize-dialog {
+.resize-dialog,
+.filter-dialog {
   width: min(720px, calc(100vw - 28px));
   max-width: none;
   max-height: min(760px, calc(100vh - 28px));
@@ -868,7 +869,8 @@ input[type="range"] {
 }
 
 .levels-dialog::backdrop,
-.resize-dialog::backdrop {
+.resize-dialog::backdrop,
+.filter-dialog::backdrop {
   background: rgba(5, 6, 8, 0.76);
   backdrop-filter: blur(3px);
 }
@@ -1140,6 +1142,10 @@ input[type="range"] {
   width: min(610px, calc(100vw - 28px));
 }
 
+.filter-dialog {
+  width: min(760px, calc(100vw - 28px));
+}
+
 .resize-body {
   overflow-y: auto;
   padding: 20px;
@@ -1354,6 +1360,163 @@ input[type="range"] {
   line-height: 1.4;
 }
 
+.filter-body {
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.filter-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(210px, 0.65fr);
+  gap: 24px;
+}
+
+.filter-kernel-section,
+.filter-options {
+  display: grid;
+  align-content: start;
+  gap: 17px;
+}
+
+.filter-options {
+  padding-left: 24px;
+  border-left: 1px solid var(--line);
+}
+
+.kernel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kernel-heading h3 {
+  margin: 0;
+  font-size: 11px;
+}
+
+.kernel-heading > span {
+  color: var(--subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kernel-grid {
+  display: grid;
+  width: min(310px, 100%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.kernel-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #11141a;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.kernel-input:hover:not(:disabled) {
+  border-color: #4b5260;
+}
+
+.kernel-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.kernel-input.kernel-center {
+  border-color: rgba(124, 218, 158, 0.48);
+  background: rgba(124, 218, 158, 0.08);
+}
+
+.kernel-grid.is-disabled::after {
+  content: "Медиана выбирается из соседних пикселей без ядра";
+  grid-column: 1 / -1;
+  color: var(--subtle);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.filter-description {
+  min-height: 30px;
+  margin: 0;
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.compact-check,
+.filter-channel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  user-select: none;
+}
+
+.compact-check input,
+.filter-channel input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.filter-channels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.filter-channel {
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #11141a;
+}
+
+.filter-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.filter-progress[hidden] {
+  display: none;
+}
+
+.filter-progress progress {
+  width: 100%;
+  height: 7px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #0d0f13;
+  accent-color: var(--accent);
+}
+
+.filter-progress span {
+  min-width: 88px;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -1436,6 +1599,15 @@ input[type="range"] {
     grid-template-rows: 44px minmax(62vh, 1fr) auto;
   }
 
+  .tool-rail {
+    gap: 3px;
+  }
+
+  .tool-button {
+    width: 32px;
+    height: 32px;
+  }
+
   .canvas-plane {
     padding: 22px;
   }
@@ -1459,7 +1631,8 @@ input[type="range"] {
   }
 
   .levels-dialog,
-  .resize-dialog {
+  .resize-dialog,
+  .filter-dialog {
     width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
   }
@@ -1536,6 +1709,23 @@ input[type="range"] {
 
   .resize-shell .dialog-actions {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .filter-body {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .filter-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .filter-options {
+    padding-top: 18px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
 }
 

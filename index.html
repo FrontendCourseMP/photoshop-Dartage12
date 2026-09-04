@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#111318" />
     <meta
       name="description"
-      content="Браузерный редактор PNG, JPEG и GrayBit-7 с каналами, пипеткой, уровнями и собственными алгоритмами масштабирования."
+      content="Браузерный редактор PNG, JPEG и GrayBit-7 с каналами, уровнями, масштабированием и фильтрацией изображений."
     />
-    <meta property="og:title" content="GB7 Studio: обработка и масштабирование изображений" />
+    <meta property="og:title" content="GB7 Studio: обработка и фильтрация изображений" />
     <meta
       property="og:description"
-      content="Каналы, пипетка CIELAB, уровни, ближайший сосед, билинейная интерполяция и экспорт изображений."
+      content="Каналы, пипетка CIELAB, уровни, масштабирование, свёртка, медианный фильтр и экспорт изображений."
     />
     <title>GB7 Studio</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%23111318%22/><path d=%22M18 17h28v8H26v14h12v-5h-7v-7h15v20H18z%22 fill=%22%237cda9e%22/></svg>" />
@@ -23,7 +23,7 @@
         <div class="brand" aria-label="GB7 Studio">
           <span class="brand-mark" aria-hidden="true">G7</span>
           <span class="brand-name">GB7 Studio</span>
-          <span class="lab-badge">Лабораторные №1-4</span>
+          <span class="lab-badge">Лабораторные №1-5</span>
         </div>
 
         <div class="topbar-actions">
@@ -81,6 +81,18 @@
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="M8 3H3v5M16 21h5v-5M3 8l6-5M21 16l-6 5M14 7h3v3M10 17H7v-3" />
+            </svg>
+          </button>
+          <button
+            class="tool-button"
+            id="filter-button"
+            type="button"
+            aria-label="Открыть фильтры"
+            title="Фильтры (F)"
+            disabled
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M4 5h16M4 12h16M4 19h16M8 3v4M16 10v4M10 17v4" />
             </svg>
           </button>
           <span class="tool-divider" aria-hidden="true"></span>
@@ -396,6 +408,95 @@
       </form>
     </dialog>
 
+    <dialog class="filter-dialog" id="filter-dialog" aria-labelledby="filter-title">
+      <div class="dialog-shell filter-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Обработка изображения</p>
+            <h2 id="filter-title">Фильтрация</h2>
+          </div>
+          <button class="dialog-close" id="filter-close" type="button" aria-label="Закрыть фильтры">×</button>
+        </header>
+
+        <div class="filter-body">
+          <div class="filter-layout">
+            <section class="filter-kernel-section" aria-labelledby="kernel-title">
+              <label class="resize-field" for="filter-preset">
+                <span>Предустановка</span>
+                <select class="select-control" id="filter-preset">
+                  <option value="identity">Тождественное отображение</option>
+                  <option value="sharpen">Повышение резкости</option>
+                  <option value="gaussian">Размытие по Гауссу 3×3</option>
+                  <option value="boxBlur">Прямоугольное размытие</option>
+                  <option value="prewittX">Оператор Прюитта X</option>
+                  <option value="prewittY">Оператор Прюитта Y</option>
+                  <option value="median">Медианный фильтр 3×3</option>
+                  <option value="custom" hidden>Пользовательское ядро</option>
+                </select>
+              </label>
+
+              <div class="kernel-heading">
+                <h3 id="kernel-title">Ядро 3×3</h3>
+                <span id="kernel-sum">Сумма: 1</span>
+              </div>
+              <div class="kernel-grid" id="kernel-grid" aria-label="Значения ядра свёртки">
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 1, столбец 1" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 1, столбец 2" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 1, столбец 3" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 2, столбец 1" />
+                <input class="kernel-input kernel-center" type="number" min="-100" max="100" step="0.0001" value="1" aria-label="Ядро, строка 2, столбец 2" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 2, столбец 3" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 3, столбец 1" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 3, столбец 2" />
+                <input class="kernel-input" type="number" min="-100" max="100" step="0.0001" value="0" aria-label="Ядро, строка 3, столбец 3" />
+              </div>
+              <p class="filter-description" id="filter-description">Пиксели остаются без изменений.</p>
+            </section>
+
+            <section class="filter-options" aria-label="Параметры фильтра">
+              <div>
+                <div class="kernel-heading">
+                  <h3>Каналы</h3>
+                  <label class="compact-check" for="filter-all-channels">
+                    <input id="filter-all-channels" type="checkbox" checked />
+                    <span>Все</span>
+                  </label>
+                </div>
+                <div class="filter-channels" id="filter-channels"></div>
+              </div>
+
+              <label class="resize-field" for="filter-edge">
+                <span>Заполнение края</span>
+                <select class="select-control" id="filter-edge">
+                  <option value="copy">Копирование</option>
+                  <option value="black">Чёрный цвет</option>
+                  <option value="white">Белый цвет</option>
+                </select>
+              </label>
+            </section>
+          </div>
+
+          <p class="resize-error" id="filter-error" role="alert" hidden></p>
+          <div class="filter-progress" id="filter-progress" hidden>
+            <progress id="filter-progress-bar" max="100" value="0"></progress>
+            <span id="filter-progress-label">Обработка: 0%</span>
+          </div>
+        </div>
+
+        <footer class="dialog-footer">
+          <label class="check-control preview-control" for="filter-preview">
+            <input id="filter-preview" type="checkbox" checked />
+            <span>Предпросмотр</span>
+          </label>
+          <div class="dialog-actions">
+            <button class="button button-secondary" id="filter-reset" type="button">Сбросить</button>
+            <button class="button button-secondary" id="filter-cancel" type="button">Отмена</button>
+            <button class="button button-primary" id="filter-apply" type="button">Применить</button>
+          </div>
+        </footer>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="./js/gb7.js"></script>
@@ -404,6 +505,7 @@
     <script src="./js/channels.js"></script>
     <script src="./js/levels.js"></script>
     <script src="./js/interpolation.js"></script>
+    <script src="./js/filters.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

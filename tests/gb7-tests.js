@@ -16,6 +16,11 @@ const {
   calculateFitScale,
   scaledDimensions,
 } = window.ImageInterpolation;
+const {
+  PRESETS: FILTER_PRESETS,
+  applyFilter,
+  applyFilterAsync,
+} = window.ImageFilters;
 
 const results = document.querySelector("#results");
 const summary = document.querySelector("#summary");
@@ -270,6 +275,152 @@ await test("неизвестный метод интерполяции откл�
     rejected = error instanceof TypeError;
   }
   assert(rejected, "неизвестный метод не был отклонён");
+});
+
+await test("набор фильтров содержит все заданные предустановки", () => {
+  const required = ["identity", "sharpen", "gaussian", "boxBlur", "prewittX", "prewittY", "median"];
+  assert(required.every((key) => FILTER_PRESETS[key]), "одна из предустановок отсутствует");
+  const gaussianSum = FILTER_PRESETS.gaussian.kernel.reduce((sum, value) => sum + value, 0);
+  assertClose(gaussianSum, 1, 0.000001, "сумма ядра Гаусса");
+});
+
+await test("тождественный фильтр сохраняет изображение и оригинал", () => {
+  const source = new Uint8ClampedArray([12, 34, 56, 78]);
+  const result = applyFilter(source, 1, 1, {
+    type: "kernel",
+    kernel: [...FILTER_PRESETS.identity.kernel],
+    channels: [0, 1, 2, 3],
+    edge: "copy",
+  });
+
+  assert(result.every((value, index) => value === source[index]), "тождественное ядро изменило пиксели");
+  result[0] = 255;
+  assert(source[0] === 12, "фильтр изменил исходный массив");
+});
+
+await test("повышение резкости корректно обрабатывает центральный пиксель", () => {
+  const source = new Uint8ClampedArray(3 * 3 * 4);
+  for (let index = 0; index < source.length; index += 4) {
+    source[index] = 10;
+    source[index + 1] = 30;
+    source[index + 2] = 40;
+    source[index + 3] = 200;
+  }
+  source[(1 * 3 + 1) * 4] = 20;
+  const result = applyFilter(source, 3, 3, {
+    type: "kernel",
+    kernel: [...FILTER_PRESETS.sharpen.kernel],
+    channels: [0],
+    edge: "copy",
+  });
+  const center = (1 * 3 + 1) * 4;
+
+  assert(result[center] === 60, `ожидалось значение 60, получено ${result[center]}`);
+  assert(result[center + 1] === 30 && result[center + 3] === 200, "фильтр изменил невыбранные каналы");
+});
+
+await test("стратегии края дают разные результаты", () => {
+  const source = new Uint8ClampedArray([90, 90, 90, 255]);
+  const options = {
+    type: "kernel",
+    kernel: [...FILTER_PRESETS.boxBlur.kernel],
+    channels: [0],
+  };
+  const black = applyFilter(source, 1, 1, { ...options, edge: "black" });
+  const white = applyFilter(source, 1, 1, { ...options, edge: "white" });
+  const copy = applyFilter(source, 1, 1, { ...options, edge: "copy" });
+
+  assert(black[0] === 10, `чёрное заполнение: ${black[0]}`);
+  assert(white[0] === 237, `белое заполнение: ${white[0]}`);
+  assert(copy[0] === 90, `копирование края: ${copy[0]}`);
+});
+
+await test("операторы Прюитта находят направление границы", () => {
+  const source = new Uint8ClampedArray(3 * 3 * 4);
+  for (let y = 0; y < 3; y += 1) {
+    for (let x = 0; x < 3; x += 1) {
+      const index = (y * 3 + x) * 4;
+      source[index] = x * 50;
+      source[index + 3] = 255;
+    }
+  }
+  const options = { type: "kernel", channels: [0], edge: "copy" };
+  const horizontal = applyFilter(source, 3, 3, {
+    ...options,
+    kernel: [...FILTER_PRESETS.prewittX.kernel],
+  });
+  const vertical = applyFilter(source, 3, 3, {
+    ...options,
+    kernel: [...FILTER_PRESETS.prewittY.kernel],
+  });
+  const center = (1 * 3 + 1) * 4;
+
+  assert(horizontal[center] === 255, "Прюитт X не обнаружил вертикальную границу");
+  assert(vertical[center] === 0, "Прюитт Y обнаружил несуществующую горизонтальную границу");
+});
+
+await test("медианный фильтр удаляет одиночный шум", () => {
+  const source = new Uint8ClampedArray(3 * 3 * 4);
+  for (let index = 0; index < source.length; index += 4) {
+    source[index] = 10;
+    source[index + 1] = 40;
+    source[index + 3] = 255;
+  }
+  source[(1 * 3 + 1) * 4] = 255;
+  const result = applyFilter(source, 3, 3, {
+    type: "median",
+    kernel: [...FILTER_PRESETS.median.kernel],
+    channels: [0],
+    edge: "copy",
+  });
+  const center = (1 * 3 + 1) * 4;
+
+  assert(result[center] === 10, "медианный фильтр не удалил импульсный шум");
+  assert(result[center + 1] === 40, "медианный фильтр изменил невыбранный канал");
+});
+
+await test("асинхронная фильтрация возвращает тот же результат", async () => {
+  const source = new Uint8ClampedArray([
+    0, 0, 0, 255, 90, 90, 90, 255,
+    180, 180, 180, 255, 255, 255, 255, 255,
+  ]);
+  const options = {
+    type: "kernel",
+    kernel: [...FILTER_PRESETS.gaussian.kernel],
+    channels: [0, 1, 2],
+    edge: "copy",
+  };
+  const expected = applyFilter(source, 2, 2, options);
+  let progress = 0;
+  const actual = await applyFilterAsync(source, 2, 2, options, {
+    chunkRows: 1,
+    onProgress: (value) => { progress = value; },
+  });
+
+  assert(actual.every((value, index) => value === expected[index]), "асинхронный результат отличается");
+  assert(progress === 1, "асинхронная обработка не завершила прогресс");
+});
+
+await test("некорректное ядро и пустой список каналов отклоняются", () => {
+  const source = new Uint8ClampedArray([0, 0, 0, 255]);
+  let invalidKernel = false;
+  let emptyChannels = false;
+  try {
+    applyFilter(source, 1, 1, { type: "kernel", kernel: [1], channels: [0], edge: "copy" });
+  } catch (error) {
+    invalidKernel = error instanceof TypeError;
+  }
+  try {
+    applyFilter(source, 1, 1, {
+      type: "kernel",
+      kernel: [...FILTER_PRESETS.identity.kernel],
+      channels: [],
+      edge: "copy",
+    });
+  } catch (error) {
+    emptyChannels = error instanceof TypeError;
+  }
+  assert(invalidKernel && emptyChannels, "некорректные параметры фильтра не были отклонены");
 });
 
 const referenceFiles = [

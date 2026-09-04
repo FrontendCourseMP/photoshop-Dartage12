@@ -18,6 +18,10 @@ const {
   calculateFitScale,
   scaledDimensions,
 } = window.ImageInterpolation;
+const {
+  PRESETS: FILTER_PRESETS,
+  applyFilterAsync,
+} = window.ImageFilters;
 
 const MAX_RASTER_PIXELS = 64_000_000;
 const MAX_IMAGE_DIMENSION = 16_384;
@@ -26,6 +30,16 @@ const EXPORT_COPY = {
   png: "PNG сохраняет прозрачность без потерь.",
   jpeg: "JPG не поддерживает прозрачность: прозрачные области станут белыми.",
   gb7: "GB7 хранит 7 бит яркости и, если нужно, 1 бит двоичной маски.",
+};
+const FILTER_DESCRIPTIONS = {
+  identity: "Пиксели остаются без изменений.",
+  sharpen: "Усиливает локальный контраст и делает границы заметнее.",
+  gaussian: "Плавно размывает изображение с большим весом центральных пикселей.",
+  boxBlur: "Равномерно усредняет каждый пиксель и восемь его соседей.",
+  prewittX: "Выделяет вертикальные границы изображения.",
+  prewittY: "Выделяет горизонтальные границы изображения.",
+  median: "Заменяет значение медианой соседей и хорошо удаляет импульсный шум.",
+  custom: "Пользовательское ядро свёртки 3×3.",
 };
 
 const elements = {
@@ -61,6 +75,7 @@ const elements = {
   eyedropperButton: document.querySelector("#eyedropper-button"),
   levelsButton: document.querySelector("#levels-button"),
   resizeButton: document.querySelector("#resize-button"),
+  filterButton: document.querySelector("#filter-button"),
   resizePanelButton: document.querySelector("#resize-panel-button"),
   scaleMethod: document.querySelector("#scale-method"),
   channelList: document.querySelector("#channel-list"),
@@ -107,6 +122,24 @@ const elements = {
   pixelsAfter: document.querySelector("#pixels-after"),
   resizeError: document.querySelector("#resize-error"),
   resizeCancel: document.querySelector("#resize-cancel"),
+  filterDialog: document.querySelector("#filter-dialog"),
+  filterClose: document.querySelector("#filter-close"),
+  filterPreset: document.querySelector("#filter-preset"),
+  kernelGrid: document.querySelector("#kernel-grid"),
+  kernelInputs: [...document.querySelectorAll(".kernel-input")],
+  kernelSum: document.querySelector("#kernel-sum"),
+  filterDescription: document.querySelector("#filter-description"),
+  filterAllChannels: document.querySelector("#filter-all-channels"),
+  filterChannels: document.querySelector("#filter-channels"),
+  filterEdge: document.querySelector("#filter-edge"),
+  filterError: document.querySelector("#filter-error"),
+  filterProgress: document.querySelector("#filter-progress"),
+  filterProgressBar: document.querySelector("#filter-progress-bar"),
+  filterProgressLabel: document.querySelector("#filter-progress-label"),
+  filterPreview: document.querySelector("#filter-preview"),
+  filterReset: document.querySelector("#filter-reset"),
+  filterCancel: document.querySelector("#filter-cancel"),
+  filterApply: document.querySelector("#filter-apply"),
   toast: document.querySelector("#toast"),
 };
 
@@ -122,6 +155,7 @@ const state = {
   activeTool: "view",
   levelsSession: null,
   resizeSession: null,
+  filterSession: null,
   interpolationMethod: "bilinear",
   renderFrame: 0,
   zoom: 1,
@@ -171,6 +205,7 @@ function setBusy(isBusy) {
   elements.levelsButton.disabled = isBusy || !state.document;
   elements.resizeButton.disabled = isBusy || !state.document;
   elements.resizePanelButton.disabled = isBusy || !state.document;
+  elements.filterButton.disabled = isBusy || !state.document;
   if (isBusy) setStatus("Обработка изображения…");
 }
 
@@ -474,6 +509,7 @@ function commitDocument(documentData) {
   elements.levelsButton.disabled = false;
   elements.resizeButton.disabled = false;
   elements.resizePanelButton.disabled = false;
+  elements.filterButton.disabled = false;
   elements.zoomRange.disabled = false;
   [elements.zoomIn, elements.zoomOut, elements.fitButton, elements.actualSizeButton].forEach((button) => {
     button.disabled = false;
@@ -670,7 +706,8 @@ function updateAlgorithmTooltip() {
 }
 
 function openResizeDialog() {
-  if (!state.document || state.busy || elements.resizeDialog.open || elements.levelsDialog.open) return;
+  if (!state.document || state.busy || elements.resizeDialog.open
+    || elements.levelsDialog.open || elements.filterDialog.open) return;
   setActiveTool("view");
   state.resizeSession = {
     units: "pixels",
@@ -747,6 +784,390 @@ async function applyResize(event) {
   } finally {
     setBusy(false);
   }
+}
+
+function filterChannelDefinitions() {
+  const isGray = state.channelModel === "gray" || state.channelModel === "gray-alpha";
+  const definitions = isGray
+    ? [{ key: "gray", label: "Серый", channels: [0, 1, 2] }]
+    : [
+      { key: "red", label: "Красный", channels: [0] },
+      { key: "green", label: "Зелёный", channels: [1] },
+      { key: "blue", label: "Синий", channels: [2] },
+    ];
+  if (state.channelModel === "gray-alpha" || state.channelModel === "rgba") {
+    definitions.push({ key: "alpha", label: "Альфа", channels: [3] });
+  }
+  return definitions;
+}
+
+function filterChannelCheckboxes() {
+  return [...elements.filterChannels.querySelectorAll("input[data-filter-channel]")];
+}
+
+function syncAllFilterChannels() {
+  const checkboxes = filterChannelCheckboxes();
+  const checkedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+  elements.filterAllChannels.checked = checkedCount === checkboxes.length;
+  elements.filterAllChannels.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
+}
+
+function populateFilterChannels() {
+  elements.filterChannels.replaceChildren();
+  filterChannelDefinitions().forEach((definition) => {
+    const label = document.createElement("label");
+    label.className = "filter-channel";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.filterChannel = definition.key;
+    checkbox.dataset.channels = definition.channels.join(",");
+    const text = document.createElement("span");
+    text.textContent = definition.label;
+    checkbox.addEventListener("change", () => {
+      syncAllFilterChannels();
+      requestFilterPreview();
+    });
+    label.append(checkbox, text);
+    elements.filterChannels.append(label);
+  });
+  syncAllFilterChannels();
+}
+
+function selectedFilterChannels() {
+  const channels = filterChannelCheckboxes()
+    .filter((checkbox) => checkbox.checked)
+    .flatMap((checkbox) => checkbox.dataset.channels.split(",").map(Number));
+  return [...new Set(channels)];
+}
+
+function formatKernelValue(value) {
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toFixed(6)));
+}
+
+function updateKernelSummary() {
+  if (elements.filterPreset.value === "median") {
+    elements.kernelSum.textContent = "Медиана";
+    return;
+  }
+  const values = elements.kernelInputs.map((input) => (
+    input.value.trim() === "" ? Number.NaN : Number(input.value)
+  ));
+  if (values.some((value) => !Number.isFinite(value))) {
+    elements.kernelSum.textContent = "Сумма: —";
+    return;
+  }
+  const sum = values.reduce((total, value) => total + value, 0);
+  elements.kernelSum.textContent = `Сумма: ${Number(sum.toFixed(4))}`;
+}
+
+function fillFilterPreset(presetKey, updatePreview = true) {
+  const preset = FILTER_PRESETS[presetKey];
+  if (!preset) return;
+  elements.filterPreset.value = presetKey;
+  elements.kernelInputs.forEach((input, index) => {
+    input.value = formatKernelValue(preset.kernel[index]);
+    input.disabled = preset.type === "median" || Boolean(state.filterSession?.applying);
+  });
+  elements.kernelGrid.classList.toggle("is-disabled", preset.type === "median");
+  elements.filterDescription.textContent = FILTER_DESCRIPTIONS[presetKey];
+  updateKernelSummary();
+  if (updatePreview) requestFilterPreview();
+}
+
+function currentFilterOptions() {
+  const channels = selectedFilterChannels();
+  if (channels.length === 0) {
+    return { valid: false, message: "Выберите хотя бы один канал." };
+  }
+
+  const type = elements.filterPreset.value === "median" ? "median" : "kernel";
+  const kernel = elements.kernelInputs.map((input) => (
+    input.value.trim() === "" ? Number.NaN : Number(input.value)
+  ));
+  if (type === "kernel" && kernel.some((value) => !Number.isFinite(value))) {
+    return { valid: false, message: "Заполните все 9 значений ядра числами." };
+  }
+  if (type === "kernel" && kernel.some((value) => Math.abs(value) > 100)) {
+    return { valid: false, message: "Значения ядра должны быть в диапазоне от -100 до 100." };
+  }
+
+  return {
+    valid: true,
+    options: {
+      type,
+      kernel,
+      channels,
+      edge: elements.filterEdge.value,
+    },
+  };
+}
+
+function showFilterValidation(result) {
+  elements.filterError.hidden = result.valid;
+  elements.filterError.textContent = result.valid ? "" : result.message;
+  elements.kernelInputs.forEach((input) => {
+    const invalid = !input.disabled && (input.value.trim() === "" || !Number.isFinite(Number(input.value))
+      || Math.abs(Number(input.value)) > 100);
+    input.setAttribute("aria-invalid", String(invalid));
+  });
+}
+
+function filterOptionsSignature(options) {
+  return JSON.stringify(options);
+}
+
+function setFilterProgress(progress, visible = true) {
+  const percentage = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+  elements.filterProgress.hidden = !visible;
+  elements.filterProgressBar.value = percentage;
+  elements.filterProgressLabel.textContent = `Обработка: ${percentage}%`;
+}
+
+function setFilterApplying(isApplying) {
+  if (state.filterSession) state.filterSession.applying = isApplying;
+  elements.filterApply.disabled = isApplying;
+  elements.filterApply.textContent = isApplying ? "Обработка…" : "Применить";
+  elements.filterPreset.disabled = isApplying;
+  elements.filterEdge.disabled = isApplying;
+  elements.filterAllChannels.disabled = isApplying;
+  elements.filterPreview.disabled = isApplying;
+  elements.filterReset.disabled = isApplying;
+  filterChannelCheckboxes().forEach((checkbox) => {
+    checkbox.disabled = isApplying;
+  });
+  const median = elements.filterPreset.value === "median";
+  elements.kernelInputs.forEach((input) => {
+    input.disabled = isApplying || median;
+  });
+}
+
+function stopFilterJob(hideProgress = true) {
+  const session = state.filterSession;
+  if (!session) return;
+  if (session.previewTimer) window.clearTimeout(session.previewTimer);
+  session.previewTimer = null;
+  session.jobId += 1;
+  session.processing = false;
+  if (session.worker) session.worker.terminate();
+  session.worker = null;
+  if (hideProgress) elements.filterProgress.hidden = true;
+}
+
+function finishFilterJob(session, jobId, mode, options, result) {
+  if (state.filterSession !== session || session.jobId !== jobId) return;
+  if (session.worker) session.worker.terminate();
+  session.worker = null;
+  session.processing = false;
+  elements.filterProgress.hidden = true;
+  session.lastResult = result;
+  session.lastSignature = filterOptionsSignature(options);
+
+  if (mode === "apply") {
+    commitFilterResult(result);
+    return;
+  }
+  if (elements.filterPreview.checked) {
+    state.previewPixels = result;
+    renderVisibleChannels();
+  }
+}
+
+function failFilterJob(session, jobId, message) {
+  if (state.filterSession !== session || session.jobId !== jobId) return;
+  if (session.worker) session.worker.terminate();
+  session.worker = null;
+  session.processing = false;
+  elements.filterProgress.hidden = true;
+  setFilterApplying(false);
+  showFilterValidation({ valid: false, message });
+}
+
+async function runFilterFallback(session, jobId, mode, options) {
+  try {
+    const result = await applyFilterAsync(
+      session.basePixels,
+      state.document.width,
+      state.document.height,
+      options,
+      {
+        chunkRows: 8,
+        shouldCancel: () => state.filterSession !== session || session.jobId !== jobId,
+        onProgress: (progress) => {
+          if (state.filterSession === session && session.jobId === jobId) setFilterProgress(progress);
+        },
+      },
+    );
+    if (result) finishFilterJob(session, jobId, mode, options, result);
+  } catch (error) {
+    failFilterJob(session, jobId, error.message || "Не удалось применить фильтр.");
+  }
+}
+
+function startFilterJob(mode, options) {
+  const session = state.filterSession;
+  if (!session) return;
+  stopFilterJob(false);
+  const jobId = session.jobId;
+  session.processing = true;
+  setFilterProgress(0);
+  if (mode === "apply") setFilterApplying(true);
+
+  if (!("Worker" in window) || window.location.protocol === "file:") {
+    runFilterFallback(session, jobId, mode, options);
+    return;
+  }
+
+  try {
+    const worker = new Worker(new URL("./js/filter-worker.js", window.location.href));
+    session.worker = worker;
+    let fallbackStarted = false;
+
+    worker.addEventListener("message", (event) => {
+      if (state.filterSession !== session || session.jobId !== jobId || event.data.id !== jobId) return;
+      if (event.data.type === "progress") {
+        setFilterProgress(event.data.progress);
+      } else if (event.data.type === "done") {
+        finishFilterJob(
+          session,
+          jobId,
+          mode,
+          options,
+          new Uint8ClampedArray(event.data.pixels),
+        );
+      } else if (event.data.type === "error") {
+        failFilterJob(session, jobId, event.data.message);
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      event.preventDefault();
+      if (fallbackStarted || state.filterSession !== session || session.jobId !== jobId) return;
+      fallbackStarted = true;
+      worker.terminate();
+      session.worker = null;
+      runFilterFallback(session, jobId, mode, options);
+    });
+
+    const sourceCopy = new Uint8ClampedArray(session.basePixels);
+    worker.postMessage({
+      id: jobId,
+      pixels: sourceCopy.buffer,
+      width: state.document.width,
+      height: state.document.height,
+      options,
+    }, [sourceCopy.buffer]);
+  } catch (error) {
+    session.worker = null;
+    runFilterFallback(session, jobId, mode, options);
+  }
+}
+
+function requestFilterPreview() {
+  const session = state.filterSession;
+  if (!session || session.applying) return;
+  stopFilterJob();
+
+  if (!elements.filterPreview.checked) {
+    state.previewPixels = null;
+    renderVisibleChannels();
+    showFilterValidation({ valid: true });
+    return;
+  }
+
+  const result = currentFilterOptions();
+  showFilterValidation(result);
+  if (!result.valid) {
+    state.previewPixels = null;
+    renderVisibleChannels();
+    return;
+  }
+
+  session.previewTimer = window.setTimeout(() => {
+    session.previewTimer = null;
+    startFilterJob("preview", result.options);
+  }, 140);
+}
+
+function resetFilterDialog() {
+  if (!state.filterSession || state.filterSession.applying) return;
+  elements.filterEdge.value = "copy";
+  elements.filterPreview.checked = true;
+  filterChannelCheckboxes().forEach((checkbox) => {
+    checkbox.checked = true;
+  });
+  syncAllFilterChannels();
+  fillFilterPreset("identity");
+  setStatus("Настройки фильтра сброшены");
+}
+
+function openFilterDialog() {
+  if (!state.document || state.busy || elements.filterDialog.open
+    || elements.levelsDialog.open || elements.resizeDialog.open) return;
+  setActiveTool("view");
+  state.filterSession = {
+    basePixels: state.originalPixels,
+    previewTimer: null,
+    worker: null,
+    jobId: 0,
+    processing: false,
+    applying: false,
+    lastResult: null,
+    lastSignature: null,
+  };
+  state.previewPixels = null;
+  populateFilterChannels();
+  elements.filterEdge.value = "copy";
+  elements.filterPreview.checked = true;
+  elements.filterProgress.hidden = true;
+  fillFilterPreset("identity", false);
+  showFilterValidation({ valid: true });
+  setFilterApplying(false);
+  elements.filterDialog.showModal();
+  requestFilterPreview();
+}
+
+function closeFilterDialog() {
+  if (!state.filterSession) return;
+  stopFilterJob();
+  state.filterSession = null;
+  state.previewPixels = null;
+  setFilterApplying(false);
+  renderVisibleChannels();
+  elements.filterDialog.close();
+  setStatus("Изменения фильтра отменены");
+}
+
+function commitFilterResult(result) {
+  if (!state.filterSession) return;
+  stopFilterJob();
+  state.originalPixels = new Uint8ClampedArray(result);
+  state.previewPixels = null;
+  syncSourceCanvas();
+  state.filterSession = null;
+  setFilterApplying(false);
+  renderChannelPanel();
+  updateChannelButtons();
+  renderVisibleChannels();
+  elements.filterDialog.close();
+  setStatus("Фильтр применён");
+  showToast("Фильтрация изображения завершена");
+}
+
+function applyFilterChanges() {
+  const session = state.filterSession;
+  if (!session || session.applying) return;
+  const result = currentFilterOptions();
+  showFilterValidation(result);
+  if (!result.valid) return;
+
+  const signature = filterOptionsSignature(result.options);
+  if (elements.filterPreview.checked && session.lastResult && session.lastSignature === signature
+    && !session.processing) {
+    commitFilterResult(session.lastResult);
+    return;
+  }
+  startFilterJob("apply", result.options);
 }
 
 function setActiveTool(tool) {
@@ -994,7 +1415,8 @@ function closeLevels({ applyChanges = false } = {}) {
 }
 
 function openLevels() {
-  if (!state.document || state.busy || elements.levelsDialog.open || elements.resizeDialog.open) return;
+  if (!state.document || state.busy || elements.levelsDialog.open
+    || elements.resizeDialog.open || elements.filterDialog.open) return;
   setActiveTool("view");
   const maxValue = state.document.format === "gb7" ? 127 : 255;
   const settings = {};
@@ -1159,6 +1581,7 @@ elements.eyedropperButton.addEventListener("click", () => {
 elements.levelsButton.addEventListener("click", openLevels);
 elements.resizeButton.addEventListener("click", openResizeDialog);
 elements.resizePanelButton.addEventListener("click", openResizeDialog);
+elements.filterButton.addEventListener("click", openFilterDialog);
 elements.resetChannels.addEventListener("click", resetChannels);
 elements.canvas.addEventListener("pointerdown", samplePixel);
 elements.levelsChannel.addEventListener("change", () => {
@@ -1195,6 +1618,32 @@ elements.resizeDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   closeResizeDialog();
 });
+elements.filterPreset.addEventListener("change", () => fillFilterPreset(elements.filterPreset.value));
+elements.kernelInputs.forEach((input) => {
+  input.addEventListener("input", () => {
+    elements.filterPreset.value = "custom";
+    elements.filterDescription.textContent = FILTER_DESCRIPTIONS.custom;
+    updateKernelSummary();
+    requestFilterPreview();
+  });
+});
+elements.filterAllChannels.addEventListener("change", () => {
+  filterChannelCheckboxes().forEach((checkbox) => {
+    checkbox.checked = elements.filterAllChannels.checked;
+  });
+  elements.filterAllChannels.indeterminate = false;
+  requestFilterPreview();
+});
+elements.filterEdge.addEventListener("change", requestFilterPreview);
+elements.filterPreview.addEventListener("change", requestFilterPreview);
+elements.filterReset.addEventListener("click", resetFilterDialog);
+elements.filterCancel.addEventListener("click", closeFilterDialog);
+elements.filterClose.addEventListener("click", closeFilterDialog);
+elements.filterApply.addEventListener("click", applyFilterChanges);
+elements.filterDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeFilterDialog();
+});
 
 document.querySelectorAll(".sample-button").forEach((button) => {
   button.addEventListener("click", () => loadSample(button.dataset.sample));
@@ -1228,25 +1677,30 @@ window.addEventListener("keydown", (event) => {
   const commandKey = event.metaKey || event.ctrlKey;
   const isEditing = event.target instanceof HTMLElement
     && event.target.matches("input, select, textarea");
+  const modalOpen = elements.levelsDialog.open || elements.resizeDialog.open || elements.filterDialog.open;
   if (commandKey && event.key.toLowerCase() === "o") {
     event.preventDefault();
-    openFilePicker();
+    if (!modalOpen) openFilePicker();
   }
   if (commandKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    downloadCurrentImage();
+    if (!modalOpen) downloadCurrentImage();
   }
   if (!commandKey && !isEditing && event.key.toLowerCase() === "i" && state.document
-    && !elements.levelsDialog.open && !elements.resizeDialog.open) {
+    && !elements.levelsDialog.open && !elements.resizeDialog.open && !elements.filterDialog.open) {
     setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
   }
   if (!commandKey && !isEditing && event.key.toLowerCase() === "l" && state.document
-    && !elements.levelsDialog.open && !elements.resizeDialog.open) {
+    && !elements.levelsDialog.open && !elements.resizeDialog.open && !elements.filterDialog.open) {
     openLevels();
   }
   if (!commandKey && !isEditing && event.key.toLowerCase() === "r" && state.document
-    && !elements.resizeDialog.open && !elements.levelsDialog.open) {
+    && !elements.resizeDialog.open && !elements.levelsDialog.open && !elements.filterDialog.open) {
     openResizeDialog();
+  }
+  if (!commandKey && !isEditing && event.key.toLowerCase() === "f" && state.document
+    && !elements.filterDialog.open && !elements.levelsDialog.open && !elements.resizeDialog.open) {
+    openFilterDialog();
   }
   if (event.key === "Escape" && state.activeTool === "eyedropper") setActiveTool("view");
 });
@@ -1263,4 +1717,5 @@ updateExportControls();
 });
 elements.resizeButton.disabled = true;
 elements.resizePanelButton.disabled = true;
+elements.filterButton.disabled = true;
 })();
