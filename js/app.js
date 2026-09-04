@@ -3,6 +3,15 @@ const { decodeGB7, encodeGB7, GB7Error } = window.GB7Codec;
 const { detectImageFormat, readRasterMetadata } = window.ImageMetadata;
 const { rgbToLab, rgbToHex } = window.ColorSpaces;
 const { listChannels, applyChannels, isolateChannel } = window.ImageChannels;
+const {
+  MIN_GAMMA,
+  MAX_GAMMA,
+  createDefaultSettings,
+  calculateHistogram,
+  applyLevels,
+  gammaToPosition,
+  positionToGamma,
+} = window.ImageLevels;
 
 const MAX_RASTER_PIXELS = 64_000_000;
 const FORMAT_LABELS = { png: "PNG", jpeg: "JPEG", gb7: "GrayBit-7" };
@@ -42,6 +51,7 @@ const elements = {
   fitButton: document.querySelector("#fit-button"),
   actualSizeButton: document.querySelector("#actual-size-button"),
   eyedropperButton: document.querySelector("#eyedropper-button"),
+  levelsButton: document.querySelector("#levels-button"),
   channelList: document.querySelector("#channel-list"),
   channelsEmpty: document.querySelector("#channels-empty"),
   resetChannels: document.querySelector("#reset-channels"),
@@ -52,6 +62,24 @@ const elements = {
   colorCoordinates: document.querySelector("#color-coordinates"),
   colorRgb: document.querySelector("#color-rgb"),
   colorLab: document.querySelector("#color-lab"),
+  levelsDialog: document.querySelector("#levels-dialog"),
+  levelsClose: document.querySelector("#levels-close"),
+  levelsChannel: document.querySelector("#levels-channel"),
+  histogramLog: document.querySelector("#histogram-log"),
+  histogramCanvas: document.querySelector("#histogram-canvas"),
+  histogramMidLabel: document.querySelector("#histogram-mid-label"),
+  histogramMaxLabel: document.querySelector("#histogram-max-label"),
+  levelsRangeLabel: document.querySelector("#levels-range-label"),
+  blackSlider: document.querySelector("#level-black-slider"),
+  gammaSlider: document.querySelector("#level-gamma-slider"),
+  whiteSlider: document.querySelector("#level-white-slider"),
+  blackValue: document.querySelector("#level-black-value"),
+  gammaValue: document.querySelector("#level-gamma-value"),
+  whiteValue: document.querySelector("#level-white-value"),
+  levelsPreview: document.querySelector("#levels-preview"),
+  levelsReset: document.querySelector("#levels-reset"),
+  levelsCancel: document.querySelector("#levels-cancel"),
+  levelsApply: document.querySelector("#levels-apply"),
   toast: document.querySelector("#toast"),
 };
 
@@ -61,9 +89,11 @@ const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true }
 const state = {
   document: null,
   originalPixels: null,
+  previewPixels: null,
   channelModel: null,
   activeChannels: new Set(),
   activeTool: "view",
+  levelsSession: null,
   zoom: 1,
   zoomMode: "fit",
   busy: false,
@@ -107,6 +137,8 @@ function setBusy(isBusy) {
     button.disabled = isBusy;
   });
   elements.downloadButton.disabled = isBusy || !state.document;
+  elements.eyedropperButton.disabled = isBusy || !state.document;
+  elements.levelsButton.disabled = isBusy || !state.document;
   if (isBusy) setStatus("Обработка изображения…");
 }
 
@@ -237,17 +269,27 @@ function resolveRasterChannelModel(format, metadata, pixels) {
 
 function setOriginalImage(imageData) {
   state.originalPixels = new Uint8ClampedArray(imageData.data);
+  state.previewPixels = null;
 
   elements.canvas.width = imageData.width;
   elements.canvas.height = imageData.height;
   sourceCanvas.width = imageData.width;
   sourceCanvas.height = imageData.height;
-  sourceContext.putImageData(new ImageData(state.originalPixels, imageData.width, imageData.height), 0, 0);
+  syncSourceCanvas();
+}
+
+function syncSourceCanvas() {
+  sourceContext.putImageData(
+    new ImageData(state.originalPixels, elements.canvas.width, elements.canvas.height),
+    0,
+    0,
+  );
 }
 
 function renderVisibleChannels() {
   if (!state.document || !state.originalPixels) return;
-  const pixels = applyChannels(state.originalPixels, state.channelModel, state.activeChannels);
+  const sourcePixels = state.previewPixels || state.originalPixels;
+  const pixels = applyChannels(sourcePixels, state.channelModel, state.activeChannels);
   context.putImageData(new ImageData(pixels, state.document.width, state.document.height), 0, 0);
 }
 
@@ -366,6 +408,7 @@ function commitDocument(documentData) {
   elements.statusDepth.textContent = `Глубина: ${documentData.shortDepth}`;
   elements.downloadButton.disabled = false;
   elements.eyedropperButton.disabled = false;
+  elements.levelsButton.disabled = false;
   elements.zoomRange.disabled = false;
   [elements.zoomIn, elements.zoomOut, elements.fitButton, elements.actualSizeButton].forEach((button) => {
     button.disabled = false;
@@ -465,6 +508,233 @@ function samplePixel(event) {
   elements.colorEmpty.hidden = true;
   elements.colorReadout.hidden = false;
   setStatus(`Пиксель ${coordinates.x}, ${coordinates.y}: RGB ${red}, ${green}, ${blue}`);
+}
+
+function levelChannelDefinitions() {
+  const isGray = state.channelModel === "gray" || state.channelModel === "gray-alpha";
+  const definitions = [{ key: "master", label: isGray ? "Master" : "Master (RGB)" }];
+  if (isGray) {
+    definitions.push({ key: "gray", label: "Серый" });
+  } else {
+    definitions.push(
+      { key: "red", label: "Красный" },
+      { key: "green", label: "Зелёный" },
+      { key: "blue", label: "Синий" },
+    );
+  }
+  if (state.channelModel === "gray-alpha" || state.channelModel === "rgba") {
+    definitions.push({ key: "alpha", label: "Альфа" });
+  }
+  return definitions;
+}
+
+function populateLevelChannels() {
+  elements.levelsChannel.replaceChildren();
+  levelChannelDefinitions().forEach((channel) => {
+    const option = document.createElement("option");
+    option.value = channel.key;
+    option.textContent = channel.label;
+    elements.levelsChannel.append(option);
+  });
+}
+
+function currentLevelSettings() {
+  return state.levelsSession.settings[elements.levelsChannel.value];
+}
+
+function syncLevelControls() {
+  const settings = currentLevelSettings();
+  const maxValue = state.levelsSession.maxValue;
+  const gammaPosition = gammaToPosition(settings.gamma, settings.black, settings.white);
+
+  elements.blackSlider.value = String(settings.black);
+  elements.gammaSlider.value = String(gammaPosition);
+  elements.whiteSlider.value = String(settings.white);
+  elements.blackValue.value = String(settings.black);
+  elements.gammaValue.value = settings.gamma.toFixed(2);
+  elements.whiteValue.value = String(settings.white);
+  elements.blackValue.max = String(settings.white - 1);
+  elements.whiteValue.min = String(settings.black + 1);
+  elements.gammaSlider.setAttribute(
+    "aria-valuetext",
+    `Гамма ${settings.gamma.toFixed(2)}, уровень ${gammaPosition.toFixed(1)} из ${maxValue}`,
+  );
+}
+
+function histogramColor(channel) {
+  if (channel === "red") return "#ff7474";
+  if (channel === "green") return "#72dc96";
+  if (channel === "blue") return "#6ea8ff";
+  if (channel === "alpha") return "#d7dbe2";
+  if (channel === "gray") return "#c8cdd6";
+  return "#8fe1ab";
+}
+
+function drawHistogram() {
+  if (!state.levelsSession) return;
+  const histogramContext = elements.histogramCanvas.getContext("2d");
+  const { width, height } = elements.histogramCanvas;
+  const channel = elements.levelsChannel.value;
+  const histogram = calculateHistogram(
+    state.levelsSession.basePixels,
+    channel,
+    state.levelsSession.maxValue,
+  );
+  const maxCount = Math.max(1, ...histogram);
+  const logarithmic = elements.histogramLog.checked;
+  const chartTop = 8;
+  const chartBottom = height - 7;
+  const chartHeight = chartBottom - chartTop;
+  const barWidth = width / histogram.length;
+
+  histogramContext.clearRect(0, 0, width, height);
+  histogramContext.fillStyle = "#090a0d";
+  histogramContext.fillRect(0, 0, width, height);
+  histogramContext.strokeStyle = "#1e2229";
+  histogramContext.lineWidth = 1;
+
+  for (let row = 1; row < 4; row += 1) {
+    const y = chartTop + (chartHeight * row) / 4;
+    histogramContext.beginPath();
+    histogramContext.moveTo(0, y + 0.5);
+    histogramContext.lineTo(width, y + 0.5);
+    histogramContext.stroke();
+  }
+
+  histogramContext.fillStyle = histogramColor(channel);
+  for (let index = 0; index < histogram.length; index += 1) {
+    const ratio = logarithmic
+      ? Math.log1p(histogram[index]) / Math.log1p(maxCount)
+      : histogram[index] / maxCount;
+    const barHeight = Math.max(histogram[index] > 0 ? 1 : 0, ratio * chartHeight);
+    histogramContext.fillRect(
+      index * barWidth,
+      chartBottom - barHeight,
+      Math.max(1, Math.ceil(barWidth)),
+      barHeight,
+    );
+  }
+}
+
+function scheduleLevelsPreview() {
+  if (!state.levelsSession || state.levelsSession.frameRequest) return;
+  state.levelsSession.frameRequest = requestAnimationFrame(() => {
+    state.levelsSession.frameRequest = 0;
+    state.previewPixels = elements.levelsPreview.checked
+      ? applyLevels(
+        state.levelsSession.basePixels,
+        state.channelModel,
+        state.levelsSession.settings,
+        state.levelsSession.maxValue,
+      )
+      : null;
+    renderVisibleChannels();
+  });
+}
+
+function updateBlackLevel(value) {
+  const settings = currentLevelSettings();
+  const maxValue = state.levelsSession.maxValue;
+  settings.black = Math.min(settings.white - 1, Math.max(0, Math.round(Number(value) || 0)));
+  settings.black = Math.min(settings.black, maxValue - 1);
+  syncLevelControls();
+  scheduleLevelsPreview();
+}
+
+function updateWhiteLevel(value) {
+  const settings = currentLevelSettings();
+  const maxValue = state.levelsSession.maxValue;
+  settings.white = Math.max(settings.black + 1, Math.min(maxValue, Math.round(Number(value) || maxValue)));
+  syncLevelControls();
+  scheduleLevelsPreview();
+}
+
+function updateGammaFromPosition(value) {
+  const settings = currentLevelSettings();
+  const position = Math.min(settings.white, Math.max(settings.black, Number(value)));
+  settings.gamma = positionToGamma(position, settings.black, settings.white);
+  syncLevelControls();
+  scheduleLevelsPreview();
+}
+
+function updateGammaValue(value) {
+  const settings = currentLevelSettings();
+  settings.gamma = Math.min(MAX_GAMMA, Math.max(MIN_GAMMA, Number(value) || 1));
+  syncLevelControls();
+  scheduleLevelsPreview();
+}
+
+function resetLevelSettings() {
+  levelChannelDefinitions().forEach((channel) => {
+    state.levelsSession.settings[channel.key] = createDefaultSettings(state.levelsSession.maxValue);
+  });
+  syncLevelControls();
+  scheduleLevelsPreview();
+  setStatus("Настройки уровней сброшены");
+}
+
+function closeLevels({ applyChanges = false } = {}) {
+  if (!state.levelsSession) return;
+  if (state.levelsSession.frameRequest) cancelAnimationFrame(state.levelsSession.frameRequest);
+
+  if (applyChanges) {
+    state.originalPixels = applyLevels(
+      state.levelsSession.basePixels,
+      state.channelModel,
+      state.levelsSession.settings,
+      state.levelsSession.maxValue,
+    );
+    state.previewPixels = null;
+    syncSourceCanvas();
+    state.levelsSession = null;
+    renderChannelPanel();
+    updateChannelButtons();
+    renderVisibleChannels();
+    elements.levelsDialog.close();
+    setStatus("Уровни применены");
+    showToast("Градационная коррекция применена");
+    return;
+  }
+
+  state.previewPixels = null;
+  state.levelsSession = null;
+  renderVisibleChannels();
+  elements.levelsDialog.close();
+  setStatus("Изменения уровней отменены");
+}
+
+function openLevels() {
+  if (!state.document || elements.levelsDialog.open) return;
+  setActiveTool("view");
+  const maxValue = state.document.format === "gb7" ? 127 : 255;
+  const settings = {};
+  levelChannelDefinitions().forEach((channel) => {
+    settings[channel.key] = createDefaultSettings(maxValue);
+  });
+
+  state.levelsSession = {
+    basePixels: new Uint8ClampedArray(state.originalPixels),
+    settings,
+    maxValue,
+    frameRequest: 0,
+  };
+
+  populateLevelChannels();
+  [elements.blackSlider, elements.gammaSlider, elements.whiteSlider].forEach((slider) => {
+    slider.max = String(maxValue);
+  });
+  elements.blackValue.max = String(maxValue - 1);
+  elements.whiteValue.max = String(maxValue);
+  elements.histogramMidLabel.textContent = String(Math.round(maxValue / 2));
+  elements.histogramMaxLabel.textContent = String(maxValue);
+  elements.levelsRangeLabel.textContent = `0…${maxValue}`;
+  elements.histogramLog.checked = false;
+  elements.levelsPreview.checked = true;
+  elements.levelsChannel.value = "master";
+  syncLevelControls();
+  drawHistogram();
+  elements.levelsDialog.showModal();
+  scheduleLevelsPreview();
 }
 
 function updateExportControls() {
@@ -576,8 +846,29 @@ elements.actualSizeButton.addEventListener("click", () => setZoom(1));
 elements.eyedropperButton.addEventListener("click", () => {
   setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
 });
+elements.levelsButton.addEventListener("click", openLevels);
 elements.resetChannels.addEventListener("click", resetChannels);
 elements.canvas.addEventListener("pointerdown", samplePixel);
+elements.levelsChannel.addEventListener("change", () => {
+  syncLevelControls();
+  drawHistogram();
+});
+elements.histogramLog.addEventListener("change", drawHistogram);
+elements.blackSlider.addEventListener("input", () => updateBlackLevel(elements.blackSlider.value));
+elements.whiteSlider.addEventListener("input", () => updateWhiteLevel(elements.whiteSlider.value));
+elements.gammaSlider.addEventListener("input", () => updateGammaFromPosition(elements.gammaSlider.value));
+elements.blackValue.addEventListener("input", () => updateBlackLevel(elements.blackValue.value));
+elements.whiteValue.addEventListener("input", () => updateWhiteLevel(elements.whiteValue.value));
+elements.gammaValue.addEventListener("input", () => updateGammaValue(elements.gammaValue.value));
+elements.levelsPreview.addEventListener("change", scheduleLevelsPreview);
+elements.levelsReset.addEventListener("click", resetLevelSettings);
+elements.levelsCancel.addEventListener("click", () => closeLevels());
+elements.levelsClose.addEventListener("click", () => closeLevels());
+elements.levelsApply.addEventListener("click", () => closeLevels({ applyChanges: true }));
+elements.levelsDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeLevels();
+});
 
 document.querySelectorAll(".sample-button").forEach((button) => {
   button.addEventListener("click", () => loadSample(button.dataset.sample));
@@ -619,6 +910,9 @@ window.addEventListener("keydown", (event) => {
   }
   if (!commandKey && event.key.toLowerCase() === "i" && state.document) {
     setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
+  }
+  if (!commandKey && event.key.toLowerCase() === "l" && state.document && !elements.levelsDialog.open) {
+    openLevels();
   }
   if (event.key === "Escape" && state.activeTool === "eyedropper") setActiveTool("view");
 });

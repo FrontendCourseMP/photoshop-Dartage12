@@ -2,6 +2,14 @@
 const { decodeGB7, encodeGB7, GB7Error } = window.GB7Codec;
 const { rgbToLab, rgbToHex } = window.ColorSpaces;
 const { applyChannels } = window.ImageChannels;
+const {
+  createDefaultSettings,
+  buildLevelsLut,
+  calculateHistogram,
+  applyLevels,
+  gammaToPosition,
+  positionToGamma,
+} = window.ImageLevels;
 
 const results = document.querySelector("#results");
 const summary = document.querySelector("#summary");
@@ -130,6 +138,64 @@ await test("CIELAB и HEX для красного", () => {
   assertClose(red.a, 80.09, 0.05, "a* красного");
   assertClose(red.b, 67.2, 0.05, "b* красного");
   assert(rgbToHex(255, 0, 0) === "#FF0000", "HEX красного неверен");
+});
+
+await test("единичная LUT уровней не меняет значения", () => {
+  const lut255 = buildLevelsLut(createDefaultSettings(255), 255);
+  const lut127 = buildLevelsLut(createDefaultSettings(127), 127);
+
+  assert(lut255[0] === 0 && lut255[64] === 64 && lut255[255] === 255, "LUT для 8 бит не единичная");
+  assert(lut127[0] === 0 && lut127[128] === 128 && lut127[255] === 255, "LUT для 7 бит не единичная");
+});
+
+await test("гамма осветляет и затемняет полутона", () => {
+  const lighter = buildLevelsLut({ black: 0, gamma: 0.5, white: 255 });
+  const darker = buildLevelsLut({ black: 0, gamma: 2, white: 255 });
+
+  assert(lighter[128] > 128, "гамма меньше 1 не осветляет");
+  assert(darker[128] < 128, "гамма больше 1 не затемняет");
+  assertClose(positionToGamma(gammaToPosition(1, 0, 255), 0, 255), 1, 0.001, "позиция гаммы 1.0");
+});
+
+await test("Master меняет RGB, но не альфа-канал", () => {
+  const original = new Uint8ClampedArray([64, 128, 192, 120]);
+  const result = applyLevels(original, "rgba", {
+    master: { black: 64, gamma: 1, white: 192 },
+    red: createDefaultSettings(),
+    green: createDefaultSettings(),
+    blue: createDefaultSettings(),
+    alpha: createDefaultSettings(),
+  });
+
+  assert(result[0] === 0 && result[2] === 255, "чёрная и белая точки Master неверны");
+  assert(result[3] === 120, "Master изменил альфа-канал");
+  assert(original[0] === 64 && original[3] === 120, "исходный массив уровней был изменён");
+});
+
+await test("настройки отдельного канала применяются независимо", () => {
+  const original = new Uint8ClampedArray([100, 100, 100, 128]);
+  const result = applyLevels(original, "rgba", {
+    master: createDefaultSettings(),
+    red: { black: 100, gamma: 1, white: 255 },
+    green: createDefaultSettings(),
+    blue: createDefaultSettings(),
+    alpha: { black: 128, gamma: 1, white: 255 },
+  });
+
+  assert(result[0] === 0 && result[1] === 100 && result[2] === 100, "красный канал изменил соседние каналы");
+  assert(result[3] === 0, "уровни альфа-канала не применились");
+});
+
+await test("гистограмма считает Master и Alpha", () => {
+  const pixels = new Uint8ClampedArray([
+    0, 0, 0, 0,
+    255, 255, 255, 255,
+  ]);
+  const master = calculateHistogram(pixels, "master", 255);
+  const alpha = calculateHistogram(pixels, "alpha", 255);
+
+  assert(master[0] === 1 && master[255] === 1, "композитная гистограмма неверна");
+  assert(alpha[0] === 1 && alpha[255] === 1, "гистограмма альфа-канала неверна");
 });
 
 const referenceFiles = [
