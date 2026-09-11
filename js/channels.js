@@ -1,4 +1,11 @@
 (() => {
+  const CHANNEL_MODES = Object.freeze([
+    Object.freeze({ key: "gray", label: "Grayscale", count: 1 }),
+    Object.freeze({ key: "gray-alpha", label: "Grayscale + Alpha", count: 2 }),
+    Object.freeze({ key: "rgb", label: "RGB", count: 3 }),
+    Object.freeze({ key: "rgba", label: "RGB + Alpha", count: 4 }),
+  ]);
+
   const CHANNELS = Object.freeze({
     gray: Object.freeze({ key: "gray", shortLabel: "Y", label: "Серый" }),
     red: Object.freeze({ key: "red", shortLabel: "R", label: "Красный" }),
@@ -83,5 +90,5 @@
     return output;
   }
 
-  window.ImageChannels = Object.freeze({ listChannels, applyChannels, isolateChannel });
+  window.ImageChannels = Object.freeze({ CHANNEL_MODES, listChannels, applyChannels, isolateChannel });
 })();

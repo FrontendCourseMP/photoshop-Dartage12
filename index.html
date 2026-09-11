@@ -163,6 +163,8 @@
               <button class="panel-action" id="reset-channels" type="button" disabled>Все</button>
             </div>
             <p class="panel-empty" id="channels-empty">Загрузите изображение, чтобы увидеть его каналы.</p>
+            <div id="channel-modes" class="channel-modes" role="group" aria-label="Режимы каналов"></div>
+            <p id="channel-mode-hint" class="channel-mode-hint" hidden>Режим просмотра не меняет исходные цвета. Ниже можно отключать отдельные каналы.</p>
             <div class="channel-list" id="channel-list" aria-label="Каналы изображения"></div>
           </section>
 
@@ -506,6 +508,7 @@
     <script src="./js/levels.js"></script>
     <script src="./js/interpolation.js"></script>
     <script src="./js/filters.js"></script>
+    <script src="./js/tool-windows.js"></script>
     <script src="./js/app.js"></script>
   </body>
 </html>

@@ -49,7 +49,9 @@
       let normalized;
       if (channel === "master") {
         normalized = relativeLuminance(pixels[index], pixels[index + 1], pixels[index + 2]);
-      } else if (channel === "red" || channel === "gray") {
+      } else if (channel === "gray") {
+        normalized = Math.round(0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2]) / 255;
+      } else if (channel === "red") {
         normalized = pixels[index] / 255;
       } else if (channel === "green") {
         normalized = pixels[index + 1] / 255;
@@ -78,11 +80,11 @@
     if (isGray) {
       const grayLut = buildLevelsLut(settingsByChannel.gray || createDefaultSettings(maxValue), maxValue);
       for (let index = 0; index < originalPixels.length; index += 4) {
-        const gray = grayLut[masterLut[originalPixels[index]]];
-        output[index] = gray;
-        output[index + 1] = gray;
-        output[index + 2] = gray;
-        output[index + 3] = hasAlpha ? alphaLut[originalPixels[index + 3]] : 255;
+        // Grayscale is a view mode: keep the underlying color and hidden alpha.
+        output[index] = grayLut[masterLut[originalPixels[index]]];
+        output[index + 1] = grayLut[masterLut[originalPixels[index + 1]]];
+        output[index + 2] = grayLut[masterLut[originalPixels[index + 2]]];
+        output[index + 3] = hasAlpha ? alphaLut[originalPixels[index + 3]] : originalPixels[index + 3];
       }
       return output;
     }
@@ -95,7 +97,7 @@
       output[index] = redLut[masterLut[originalPixels[index]]];
       output[index + 1] = greenLut[masterLut[originalPixels[index + 1]]];
       output[index + 2] = blueLut[masterLut[originalPixels[index + 2]]];
-      output[index + 3] = hasAlpha ? alphaLut[originalPixels[index + 3]] : 255;
+      output[index + 3] = hasAlpha ? alphaLut[originalPixels[index + 3]] : originalPixels[index + 3];
     }
 
     return output;

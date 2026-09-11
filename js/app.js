@@ -2,7 +2,7 @@
 const { decodeGB7, encodeGB7, GB7Error } = window.GB7Codec;
 const { detectImageFormat, readRasterMetadata } = window.ImageMetadata;
 const { rgbToLab, rgbToHex } = window.ColorSpaces;
-const { listChannels, applyChannels, isolateChannel } = window.ImageChannels;
+const { CHANNEL_MODES, listChannels, applyChannels, isolateChannel } = window.ImageChannels;
 const {
   MIN_GAMMA,
   MAX_GAMMA,
@@ -79,6 +79,8 @@ const elements = {
   resizePanelButton: document.querySelector("#resize-panel-button"),
   scaleMethod: document.querySelector("#scale-method"),
   channelList: document.querySelector("#channel-list"),
+  channelModes: document.querySelector("#channel-modes"),
+  channelModeHint: document.querySelector("#channel-mode-hint"),
   channelsEmpty: document.querySelector("#channels-empty"),
   resetChannels: document.querySelector("#reset-channels"),
   colorEmpty: document.querySelector("#color-empty"),
@@ -150,6 +152,8 @@ const state = {
   document: null,
   originalPixels: null,
   previewPixels: null,
+  previewOwner: null,
+  documentRevision: 0,
   channelModel: null,
   activeChannels: new Set(),
   activeTool: "view",
@@ -210,9 +214,16 @@ function setBusy(isBusy) {
 }
 
 async function loadFile(file) {
-  if (!file) return;
-  const buffer = await file.arrayBuffer();
-  await loadImageBuffer(buffer, file.name, file.size);
+  if (!file || state.busy) return;
+  setBusy(true);
+  try {
+    const buffer = await file.arrayBuffer();
+    await loadImageBuffer(buffer, file.name, file.size);
+  } catch (error) {
+    showToast(error.message || "Не удалось прочитать файл.", true);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function loadImageBuffer(buffer, fileName, fileSize = buffer.byteLength) {
@@ -335,6 +346,15 @@ function resolveRasterChannelModel(format, metadata, pixels) {
 }
 
 function setOriginalImage(imageData) {
+  if (state.levelsSession?.frameRequest) cancelAnimationFrame(state.levelsSession.frameRequest);
+  stopFilterJob();
+  state.levelsSession = null;
+  state.filterSession = null;
+  state.resizeSession = null;
+  state.previewOwner = null;
+  [elements.levelsDialog, elements.filterDialog, elements.resizeDialog].forEach((dialog) => {
+    if (dialog.open) dialog.close();
+  });
   state.originalPixels = new Uint8ClampedArray(imageData.data);
   state.previewPixels = null;
 
@@ -392,10 +412,9 @@ function drawChannelThumbnail(canvas, channelKey) {
   const y = Math.floor((canvas.height - height) / 2);
 
   previewContext.clearRect(0, 0, canvas.width, canvas.height);
-  previewContext.drawImage(sourceCanvas, x, y, width, height);
-  const preview = previewContext.getImageData(0, 0, canvas.width, canvas.height);
-  const isolated = isolateChannel(preview.data, channelKey);
-  previewContext.putImageData(new ImageData(isolated, canvas.width, canvas.height), 0, 0);
+  const preview = resizePixels(state.originalPixels, sourceCanvas.width, sourceCanvas.height, width, height, "nearest");
+  const isolated = isolateChannel(preview, channelKey);
+  previewContext.putImageData(new ImageData(isolated, width, height), x, y);
 }
 
 function updateChannelButtons() {
@@ -473,8 +492,125 @@ function resetChannels() {
 function configureChannels(model) {
   state.channelModel = model;
   state.activeChannels = new Set(listChannels(model).map((channel) => channel.key));
+  renderChannelModes();
   renderChannelPanel();
   renderVisibleChannels();
+}
+
+function renderChannelModes() {
+  elements.channelModes.replaceChildren();
+  elements.channelModeHint.hidden = !state.document;
+  if (!state.document) return;
+  CHANNEL_MODES.forEach((mode) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "channel-mode";
+    button.dataset.mode = mode.key;
+    button.setAttribute("aria-pressed", String(mode.key === state.channelModel));
+    const thumbnail = document.createElement("canvas");
+    thumbnail.width = 88;
+    thumbnail.height = 48;
+    thumbnail.setAttribute("aria-hidden", "true");
+    const thumbnailContext = thumbnail.getContext("2d");
+    const scale = Math.min(88 / sourceCanvas.width, 48 / sourceCanvas.height);
+    const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+    const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+    const x = Math.floor((88 - width) / 2);
+    const y = Math.floor((48 - height) / 2);
+    const preview = resizePixels(state.originalPixels, sourceCanvas.width, sourceCanvas.height, width, height, "nearest");
+    const pixels = applyChannels(preview, mode.key, new Set(listChannels(mode.key).map((channel) => channel.key)));
+    thumbnailContext.putImageData(new ImageData(pixels, width, height), x, y);
+    const label = document.createElement("span");
+    label.textContent = `${mode.count} · ${mode.label}`;
+    button.append(thumbnail, label);
+    button.addEventListener("click", () => selectChannelMode(mode.key));
+    elements.channelModes.append(button);
+  });
+}
+
+function selectChannelMode(model) {
+  if (!state.document || state.busy || model === state.channelModel) return;
+  state.documentRevision += 1;
+  configureChannels(model);
+  rebaseToolSessions({ modelChanged: true });
+  setStatus(`Режим: ${CHANNEL_MODES.find((mode) => mode.key === model).label}`);
+}
+
+// Each correction owns its preview. Switching tools never commits a draft.
+function refreshPreview() {
+  const owner = state.previewOwner;
+  const session = owner === "levels" ? state.levelsSession : owner === "filter" ? state.filterSession : null;
+  const enabled = owner === "levels" ? elements.levelsPreview.checked : elements.filterPreview.checked;
+  state.previewPixels = session && enabled ? session.previewPixels || null : null;
+  renderVisibleChannels();
+}
+
+function activatePreview(owner) {
+  if (!(owner === "levels" ? state.levelsSession : state.filterSession)) return;
+  state.previewOwner = owner;
+  refreshPreview();
+}
+
+function releasePreview(owner) {
+  if (state.previewOwner === owner) {
+    state.previewOwner = state.levelsSession ? "levels" : state.filterSession ? "filter" : null;
+  }
+  refreshPreview();
+}
+
+function rebaseToolSessions({ modelChanged = false } = {}) {
+  const levels = state.levelsSession;
+  if (levels) {
+    if (levels.frameRequest) cancelAnimationFrame(levels.frameRequest);
+    levels.frameRequest = 0;
+    levels.basePixels = state.originalPixels;
+    levels.previewPixels = null;
+    if (modelChanged) {
+      const selected = elements.levelsChannel.value;
+      populateLevelChannels();
+      levelChannelDefinitions().forEach(({ key }) => {
+        levels.settings[key] ||= createDefaultSettings(levels.maxValue);
+      });
+      if (levels.settings[selected] && [...elements.levelsChannel.options].some((option) => option.value === selected)) {
+        elements.levelsChannel.value = selected;
+      }
+      syncLevelControls();
+    }
+    drawHistogram();
+    scheduleLevelsPreview(false);
+  }
+  const filter = state.filterSession;
+  if (filter) {
+    const applying = filter.applying;
+    stopFilterJob();
+    filter.basePixels = state.originalPixels;
+    filter.width = state.document.width;
+    filter.height = state.document.height;
+    filter.revision = state.documentRevision;
+    filter.lastResult = null;
+    filter.lastSignature = null;
+    filter.previewPixels = null;
+    setFilterApplying(false);
+    if (modelChanged) populateFilterChannels();
+    const options = applying ? currentFilterOptions() : null;
+    if (options?.valid) startFilterJob("apply", options.options);
+    else requestFilterPreview(false);
+  }
+  if (state.resizeSession) updateResizeSummary();
+  refreshPreview();
+}
+
+function commitPixels(pixels) {
+  state.originalPixels = pixels;
+  state.documentRevision += 1;
+  sourceCanvas.width = state.document.width;
+  sourceCanvas.height = state.document.height;
+  syncSourceCanvas();
+  resetColorSample();
+  renderChannelModes();
+  renderChannelPanel();
+  updateChannelButtons();
+  rebaseToolSessions();
 }
 
 function resetColorSample() {
@@ -483,6 +619,9 @@ function resetColorSample() {
 }
 
 function commitDocument(documentData) {
+  state.previewOwner = null;
+  state.previewPixels = null;
+  state.documentRevision += 1;
   state.document = documentData;
   state.interpolationMethod = "bilinear";
   state.zoom = calculateFitScale(
@@ -706,9 +845,8 @@ function updateAlgorithmTooltip() {
 }
 
 function openResizeDialog() {
-  if (!state.document || state.busy || elements.resizeDialog.open
-    || elements.levelsDialog.open || elements.filterDialog.open) return;
-  setActiveTool("view");
+  if (!state.document || state.busy) return;
+  if (elements.resizeDialog.open) return window.ToolWindows.show(elements.resizeDialog);
   state.resizeSession = {
     units: "pixels",
     lastValidWidth: state.document.width,
@@ -721,7 +859,7 @@ function openResizeDialog() {
   writeResizeFields(state.document.width, state.document.height);
   updateAlgorithmTooltip();
   updateResizeSummary();
-  elements.resizeDialog.showModal();
+  window.ToolWindows.show(elements.resizeDialog);
   elements.resizeWidth.focus();
   elements.resizeWidth.select();
 }
@@ -745,6 +883,8 @@ async function applyResize(event) {
   const { width, height } = result.dimensions;
   const sourceWidth = state.document.width;
   const sourceHeight = state.document.height;
+  const sourcePixels = state.originalPixels;
+  const revision = state.documentRevision;
   const method = elements.resizeMethod.value;
   state.resizeSession = null;
   elements.resizeDialog.close();
@@ -754,25 +894,23 @@ async function applyResize(event) {
   await new Promise((resolve) => requestAnimationFrame(resolve));
 
   try {
+    if (revision !== state.documentRevision) {
+      showToast("Изображение успело измениться. Повторите изменение размера.");
+      return;
+    }
     const resizedPixels = resizePixels(
-      state.originalPixels,
+      sourcePixels,
       sourceWidth,
       sourceHeight,
       width,
       height,
       method,
     );
-    state.originalPixels = resizedPixels;
-    state.previewPixels = null;
     state.document.width = width;
     state.document.height = height;
     state.interpolationMethod = method;
     state.zoom = safeZoomForDocument(state.zoom);
-    sourceCanvas.width = width;
-    sourceCanvas.height = height;
-    syncSourceCanvas();
-    configureChannels(state.channelModel);
-    resetColorSample();
+    commitPixels(resizedPixels);
     elements.dimensions.textContent = `${width} × ${height} px`;
     elements.statusDimensions.textContent = `${width} × ${height} px`;
     setZoom(state.zoom);
@@ -956,7 +1094,7 @@ function stopFilterJob(hideProgress = true) {
 }
 
 function finishFilterJob(session, jobId, mode, options, result) {
-  if (state.filterSession !== session || session.jobId !== jobId) return;
+  if (state.filterSession !== session || session.jobId !== jobId || session.revision !== state.documentRevision) return;
   if (session.worker) session.worker.terminate();
   session.worker = null;
   session.processing = false;
@@ -969,8 +1107,8 @@ function finishFilterJob(session, jobId, mode, options, result) {
     return;
   }
   if (elements.filterPreview.checked) {
-    state.previewPixels = result;
-    renderVisibleChannels();
+    session.previewPixels = result;
+    refreshPreview();
   }
 }
 
@@ -988,8 +1126,8 @@ async function runFilterFallback(session, jobId, mode, options) {
   try {
     const result = await applyFilterAsync(
       session.basePixels,
-      state.document.width,
-      state.document.height,
+      session.width,
+      session.height,
       options,
       {
         chunkRows: 8,
@@ -1053,8 +1191,8 @@ function startFilterJob(mode, options) {
     worker.postMessage({
       id: jobId,
       pixels: sourceCopy.buffer,
-      width: state.document.width,
-      height: state.document.height,
+      width: session.width,
+      height: session.height,
       options,
     }, [sourceCopy.buffer]);
   } catch (error) {
@@ -1063,14 +1201,15 @@ function startFilterJob(mode, options) {
   }
 }
 
-function requestFilterPreview() {
+function requestFilterPreview(activate = true) {
   const session = state.filterSession;
   if (!session || session.applying) return;
   stopFilterJob();
+  if (activate) state.previewOwner = "filter";
+  session.previewPixels = null;
+  refreshPreview();
 
   if (!elements.filterPreview.checked) {
-    state.previewPixels = null;
-    renderVisibleChannels();
     showFilterValidation({ valid: true });
     return;
   }
@@ -1078,8 +1217,6 @@ function requestFilterPreview() {
   const result = currentFilterOptions();
   showFilterValidation(result);
   if (!result.valid) {
-    state.previewPixels = null;
-    renderVisibleChannels();
     return;
   }
 
@@ -1102,11 +1239,18 @@ function resetFilterDialog() {
 }
 
 function openFilterDialog() {
-  if (!state.document || state.busy || elements.filterDialog.open
-    || elements.levelsDialog.open || elements.resizeDialog.open) return;
-  setActiveTool("view");
+  if (!state.document || state.busy) return;
+  if (elements.filterDialog.open) {
+    window.ToolWindows.show(elements.filterDialog);
+    activatePreview("filter");
+    return;
+  }
   state.filterSession = {
     basePixels: state.originalPixels,
+    width: state.document.width,
+    height: state.document.height,
+    revision: state.documentRevision,
+    previewPixels: null,
     previewTimer: null,
     worker: null,
     jobId: 0,
@@ -1115,7 +1259,6 @@ function openFilterDialog() {
     lastResult: null,
     lastSignature: null,
   };
-  state.previewPixels = null;
   populateFilterChannels();
   elements.filterEdge.value = "copy";
   elements.filterPreview.checked = true;
@@ -1123,7 +1266,7 @@ function openFilterDialog() {
   fillFilterPreset("identity", false);
   showFilterValidation({ valid: true });
   setFilterApplying(false);
-  elements.filterDialog.showModal();
+  window.ToolWindows.show(elements.filterDialog);
   requestFilterPreview();
 }
 
@@ -1131,9 +1274,8 @@ function closeFilterDialog() {
   if (!state.filterSession) return;
   stopFilterJob();
   state.filterSession = null;
-  state.previewPixels = null;
   setFilterApplying(false);
-  renderVisibleChannels();
+  releasePreview("filter");
   elements.filterDialog.close();
   setStatus("Изменения фильтра отменены");
 }
@@ -1141,14 +1283,10 @@ function closeFilterDialog() {
 function commitFilterResult(result) {
   if (!state.filterSession) return;
   stopFilterJob();
-  state.originalPixels = new Uint8ClampedArray(result);
-  state.previewPixels = null;
-  syncSourceCanvas();
   state.filterSession = null;
   setFilterApplying(false);
-  renderChannelPanel();
-  updateChannelButtons();
-  renderVisibleChannels();
+  commitPixels(new Uint8ClampedArray(result));
+  releasePreview("filter");
   elements.filterDialog.close();
   setStatus("Фильтр применён");
   showToast("Фильтрация изображения завершена");
@@ -1156,7 +1294,7 @@ function commitFilterResult(result) {
 
 function applyFilterChanges() {
   const session = state.filterSession;
-  if (!session || session.applying) return;
+  if (!session || session.applying || state.busy) return;
   const result = currentFilterOptions();
   showFilterValidation(result);
   if (!result.valid) return;
@@ -1327,19 +1465,27 @@ function drawHistogram() {
   }
 }
 
-function scheduleLevelsPreview() {
-  if (!state.levelsSession || state.levelsSession.frameRequest) return;
-  state.levelsSession.frameRequest = requestAnimationFrame(() => {
-    state.levelsSession.frameRequest = 0;
-    state.previewPixels = elements.levelsPreview.checked
+function scheduleLevelsPreview(activate = true) {
+  const session = state.levelsSession;
+  if (!session) return;
+  if (activate) state.previewOwner = "levels";
+  if (!elements.levelsPreview.checked) {
+    session.previewPixels = null;
+    refreshPreview();
+  }
+  if (session.frameRequest) return;
+  session.frameRequest = requestAnimationFrame(() => {
+    if (state.levelsSession !== session) return;
+    session.frameRequest = 0;
+    session.previewPixels = elements.levelsPreview.checked
       ? applyLevels(
-        state.levelsSession.basePixels,
+        session.basePixels,
         state.channelModel,
-        state.levelsSession.settings,
-        state.levelsSession.maxValue,
+        session.settings,
+        session.maxValue,
       )
       : null;
-    renderVisibleChannels();
+    refreshPreview();
   });
 }
 
@@ -1376,8 +1522,9 @@ function updateGammaValue(value) {
 }
 
 function resetLevelSettings() {
-  levelChannelDefinitions().forEach((channel) => {
-    state.levelsSession.settings[channel.key] = createDefaultSettings(state.levelsSession.maxValue);
+  if (!state.levelsSession) return;
+  Object.keys(state.levelsSession.settings).forEach((key) => {
+    state.levelsSession.settings[key] = createDefaultSettings(state.levelsSession.maxValue);
   });
   syncLevelControls();
   scheduleLevelsPreview();
@@ -1386,38 +1533,38 @@ function resetLevelSettings() {
 
 function closeLevels({ applyChanges = false } = {}) {
   if (!state.levelsSession) return;
+  if (applyChanges && state.busy) return;
   if (state.levelsSession.frameRequest) cancelAnimationFrame(state.levelsSession.frameRequest);
 
   if (applyChanges) {
-    state.originalPixels = applyLevels(
+    const result = applyLevels(
       state.levelsSession.basePixels,
       state.channelModel,
       state.levelsSession.settings,
       state.levelsSession.maxValue,
     );
-    state.previewPixels = null;
-    syncSourceCanvas();
     state.levelsSession = null;
-    renderChannelPanel();
-    updateChannelButtons();
-    renderVisibleChannels();
+    commitPixels(result);
+    releasePreview("levels");
     elements.levelsDialog.close();
     setStatus("Уровни применены");
     showToast("Градационная коррекция применена");
     return;
   }
 
-  state.previewPixels = null;
   state.levelsSession = null;
-  renderVisibleChannels();
+  releasePreview("levels");
   elements.levelsDialog.close();
   setStatus("Изменения уровней отменены");
 }
 
 function openLevels() {
-  if (!state.document || state.busy || elements.levelsDialog.open
-    || elements.resizeDialog.open || elements.filterDialog.open) return;
-  setActiveTool("view");
+  if (!state.document || state.busy) return;
+  if (elements.levelsDialog.open) {
+    window.ToolWindows.show(elements.levelsDialog);
+    activatePreview("levels");
+    return;
+  }
   const maxValue = state.document.format === "gb7" ? 127 : 255;
   const settings = {};
   levelChannelDefinitions().forEach((channel) => {
@@ -1426,6 +1573,7 @@ function openLevels() {
 
   state.levelsSession = {
     basePixels: new Uint8ClampedArray(state.originalPixels),
+    previewPixels: null,
     settings,
     maxValue,
     frameRequest: 0,
@@ -1445,7 +1593,7 @@ function openLevels() {
   elements.levelsChannel.value = "master";
   syncLevelControls();
   drawHistogram();
-  elements.levelsDialog.showModal();
+  window.ToolWindows.show(elements.levelsDialog);
   scheduleLevelsPreview();
 }
 
@@ -1540,6 +1688,7 @@ async function downloadCurrentImage() {
 }
 
 async function loadSample(fileName) {
+  if (state.busy) return;
   if (window.location.protocol === "file:") {
     setStatus("Выберите файл примера вручную");
     showToast("Для локального запуска откройте пример кнопкой «Открыть».");
@@ -1674,32 +1823,28 @@ elements.viewport.addEventListener("drop", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented) return;
   const commandKey = event.metaKey || event.ctrlKey;
   const isEditing = event.target instanceof HTMLElement
     && event.target.matches("input, select, textarea");
-  const modalOpen = elements.levelsDialog.open || elements.resizeDialog.open || elements.filterDialog.open;
   if (commandKey && event.key.toLowerCase() === "o") {
     event.preventDefault();
-    if (!modalOpen) openFilePicker();
+    openFilePicker();
   }
   if (commandKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    if (!modalOpen) downloadCurrentImage();
+    downloadCurrentImage();
   }
-  if (!commandKey && !isEditing && event.key.toLowerCase() === "i" && state.document
-    && !elements.levelsDialog.open && !elements.resizeDialog.open && !elements.filterDialog.open) {
+  if (!commandKey && !isEditing && event.key.toLowerCase() === "i" && state.document) {
     setActiveTool(state.activeTool === "eyedropper" ? "view" : "eyedropper");
   }
-  if (!commandKey && !isEditing && event.key.toLowerCase() === "l" && state.document
-    && !elements.levelsDialog.open && !elements.resizeDialog.open && !elements.filterDialog.open) {
+  if (!commandKey && !isEditing && event.key.toLowerCase() === "l" && state.document) {
     openLevels();
   }
-  if (!commandKey && !isEditing && event.key.toLowerCase() === "r" && state.document
-    && !elements.resizeDialog.open && !elements.levelsDialog.open && !elements.filterDialog.open) {
+  if (!commandKey && !isEditing && event.key.toLowerCase() === "r" && state.document) {
     openResizeDialog();
   }
-  if (!commandKey && !isEditing && event.key.toLowerCase() === "f" && state.document
-    && !elements.filterDialog.open && !elements.levelsDialog.open && !elements.resizeDialog.open) {
+  if (!commandKey && !isEditing && event.key.toLowerCase() === "f" && state.document) {
     openFilterDialog();
   }
   if (event.key === "Escape" && state.activeTool === "eyedropper") setActiveTool("view");
@@ -1710,6 +1855,15 @@ const viewportObserver = new ResizeObserver(() => {
   else if (state.document) setZoom(state.zoom);
 });
 viewportObserver.observe(elements.viewport);
+
+[[elements.levelsDialog, "levels"], [elements.filterDialog, "filter"]].forEach(([dialog, owner]) => {
+  const note = document.createElement("p");
+  note.className = "preview-note";
+  note.textContent = "Предпросмотр выбранного инструмента. Примените правку, чтобы сохранить её перед следующей коррекцией.";
+  dialog.querySelector(".levels-body, .filter-body").prepend(note);
+  dialog.addEventListener("pointerdown", () => activatePreview(owner));
+  dialog.addEventListener("focusin", () => activatePreview(owner));
+});
 
 updateExportControls();
 [elements.zoomIn, elements.zoomOut, elements.fitButton, elements.actualSizeButton].forEach((button) => {
